@@ -31,4 +31,6 @@ globalThis.api = Object.freeze({
   youtube: (payload) => requestApi("youtube", payload),
 });
 
-globalThis.product = globalThis.parser.parseProduct(document, location);
+setTimeout(() => {
+  globalThis.product = globalThis.parser.parseProduct(document, location);
+}, 1000);

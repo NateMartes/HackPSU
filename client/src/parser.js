@@ -31,7 +31,7 @@
       asin,
       url: `https://www.amazon.com/dp/${asin}`,
       title,
-      brand: cleanBrand(text(doc, "#bylineInfo")),
+      brand: getBrand(doc),
       model: getModel(doc),
       variant: getVariant(doc, title),
       price: getPrice(doc),
@@ -61,6 +61,14 @@
         text(section, "option:checked") ||
         attribute(section, "[aria-checked='true']", "title");
 
+      if (value) variants.push(value);
+    }
+
+    for (const selected of doc.querySelectorAll(
+      "[id^='inline-twister-expanded-dimension-text-'], " +
+        "#twister_feature_div .a-button-selected .a-button-text",
+    )) {
+      const value = selected.textContent?.replace(/\s+/g, " ").trim();
       if (value) variants.push(value);
     }
 
@@ -103,6 +111,7 @@
     const rows = doc.querySelectorAll(
       "#productDetails_detailBullets_sections1 tr, " +
         "#productDetails_techSpec_section_1 tr, " +
+        "#productOverview_feature_div tr, " +
         "#detailBullets_feature_div li",
     );
 
@@ -115,6 +124,33 @@
 
       const value = text(row, "td") || text(row, ".a-list-item");
       return value?.replace(label, "").replace(/^\s*:\s*/, "").trim() || null;
+    }
+
+    const extendedTitle = text(doc, "#productTitle_feature_div");
+    const modelInTitle = extendedTitle?.match(/\(([A-Z0-9][A-Z0-9 /-]*\d[A-Z0-9 /-]*)\)/i);
+    if (modelInTitle) return modelInTitle[1].replace(/\s+/g, "-");
+
+    return null;
+  }
+
+  function getBrand(doc) {
+    const byline =
+      text(doc, "#bylineInfo") ||
+      text(doc, "#bylineInfo_feature_div a") ||
+      text(doc, "#brand");
+    if (byline) return cleanBrand(byline);
+
+    for (const link of doc.querySelectorAll("#centerCol a, #dp-container a")) {
+      const value = link.textContent?.replace(/\s+/g, " ").trim();
+      if (/^visit (?:the )?.+ store$/i.test(value || "")) {
+        return cleanBrand(value);
+      }
+    }
+
+    for (const row of doc.querySelectorAll("#productOverview_feature_div tr")) {
+      if (/^brand\s*:?$/i.test(text(row, "td:first-child") || "")) {
+        return text(row, "td:last-child");
+      }
     }
 
     return null;
@@ -143,7 +179,7 @@
   function cleanBrand(value) {
     return (
       value
-        ?.replace(/^visit the\s+/i, "")
+        ?.replace(/^visit (?:the )?\s*/i, "")
         .replace(/^brand\s*:\s*/i, "")
         .replace(/\s+store$/i, "")
         .trim() || null
