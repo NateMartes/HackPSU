@@ -25,8 +25,12 @@ async function requestApi(endpoint, payload = {}) {
   return response.data;
 }
 
-globalThis.hackPsuApi = Object.freeze({
+globalThis.api = Object.freeze({
   prices: (payload) => requestApi("prices", payload),
   shopping: (payload) => requestApi("shopping", payload),
   youtube: (payload) => requestApi("youtube", payload),
 });
+
+setTimeout(() => {
+  globalThis.product = globalThis.parser.parseProduct(document, location);
+}, 1000);
