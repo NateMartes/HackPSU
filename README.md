@@ -7,6 +7,8 @@ Install and run the API from the repository root:
 ```bash
 python3 -m pip install -r api/requirements.txt
 export YOUTUBE_API_KEY="your-youtube-data-api-key"
+export GEMINI_API_KEY="your-gemini-api-key"
+# Optional: export GEMINI_MODEL="gemini-3.8-flash"
 python3 -m uvicorn api.main:app --reload
 ```
 
@@ -17,7 +19,15 @@ The test API routes are available at:
 - `POST /api/youtube`
 
 The YouTube route searches the YouTube Data API v3 for the submitted product's
-`title` and requires `YOUTUBE_API_KEY` in the API process environment.
+`title`, retrieves an English transcript for each result when one is available,
+aggregates it into normalized timestamp-free text, and adds each video's view
+count, like count, like-to-view percentage, and views per like. It requires
+`YOUTUBE_API_KEY` and `GEMINI_API_KEY` in the API process environment. Gemini
+analyzes each transcript concurrently for product-specific overall and aspect
+sentiment, verifies aspect evidence against the transcript, and produces a
+cross-video consensus summary. Set `GEMINI_MODEL` to override the default
+`gemini-3.8-flash` model. The response omits YouTube's video IDs, thumbnails,
+and ETags because downstream analysis does not use them.
 
 The price and shopping routes are still placeholders and return `501 Not
 Implemented`. Requests from `http://localhost:3000` are allowed by the CORS
