@@ -26,8 +26,19 @@ the POST requests on behalf of the content script. Content-script code can wait
 for a response with, for example:
 
 ```js
-const result = await globalThis.hackPsuApi.prices({ query: "headphones" });
+const result = await globalThis.api.prices({ query: "headphones" });
 ```
+
+The extension only runs on Amazon pages. It parses the default product once
+when the page loads:
+
+```js
+console.log(globalThis.product);
+```
+
+The parser returns a canonical ASIN URL, title, brand, model, selected variant,
+structured variant values, numeric price, ISO currency code, and HTTPS image
+URL. Fields Amazon does not publish are returned as `null` instead of guessed.
 
 The `localhost:3000` CORS rule is for a separate local web frontend. Extension
 requests use the service worker and the API host permissions in
