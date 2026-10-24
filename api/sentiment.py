@@ -15,12 +15,12 @@ from api.type import Product
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
 GEMINI_MODEL_ENV = "GEMINI_MODEL"
 GEMINI_SUMMARY_MODEL_ENV = "GEMINI_SUMMARY_MODEL"
-DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_GEMINI_SUMMARY_MODEL = "gemini-3.1-flash-lite"
 # Only the top-N videos with usable transcripts are sent to Gemini.
 MAX_ANALYZED_VIDEOS = 3
 GEMINI_MAX_RETRIES = 2
-RETRYABLE_STATUS_CODES = {429, 500, 503}
+RETRYABLE_STATUS_CODES = {500, 503}
 SentimentLabel = Literal["positive", "neutral", "negative"]
 
 

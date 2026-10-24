@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from youtube_transcript_api import YouTubeTranscriptApi, YouTubeTranscriptApiException
 
-from api.sentiment import analyze_youtube_reviews
+from api.sentiment import MAX_ANALYZED_VIDEOS, analyze_youtube_reviews
 from api.type import Product
 
 
@@ -325,14 +325,26 @@ def filter_results(payload: dict[str, Any]) -> dict[str, Any]:
     return filtered
 
 
-def _video_previews(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Build lightweight video cards from the search results alone."""
+def _has_transcript(transcript_result: dict[str, Any] | None) -> bool:
+    if not isinstance(transcript_result, dict):
+        return False
+    transcript = transcript_result.get("transcript")
+    if not isinstance(transcript, dict):
+        return False
+    text = transcript.get("text")
+    return isinstance(text, str) and bool(text.strip())
+
+
+def _video_previews(
+    payload: dict[str, Any], transcripts: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Build lightweight video cards for search results that have a transcript."""
     previews: list[dict[str, Any]] = []
     for item in payload.get("items", []):
         if not isinstance(item, dict):
             continue
         video_id = _video_id_from_item(item)
-        if not video_id:
+        if not video_id or not _has_transcript(transcripts.get(video_id)):
             continue
 
         snippet = item.get("snippet")
@@ -350,37 +362,32 @@ def _video_previews(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 ),
             }
         )
+        if len(previews) >= MAX_ANALYZED_VIDEOS:
+            break
     return previews
 
 
-async def _gather_youtube_results(
+async def _youtube_events(
     product: Product, search_results: dict[str, Any], video_ids: list[str]
-) -> dict[str, Any]:
-    """Fetch statistics, transcripts and sentiment for already-found videos."""
-
-    async def _transcripts_and_sentiment() -> tuple[
-        dict[str, dict[str, Any]],
-        tuple[dict[str, dict[str, Any]], dict[str, Any]],
-    ]:
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield stream events: videos (once transcripts are known), then the result."""
+    # Statistics are independent of transcripts/sentiment; fetch in background.
+    print("Gathering YouTube video statistics...", flush=True)
+    statistics_task = asyncio.create_task(_fetch_video_statistics(video_ids))
+    try:
         print("Gathering YouTube transcripts...", flush=True)
         transcripts = await _fetch_transcripts(video_ids)
+
+        # Only surface videos we can actually analyze.
+        yield {"type": "videos", "videos": _video_previews(search_results, transcripts)}
+
         print("Analyzing review sentiment...", flush=True)
-        sentiment = await analyze_youtube_reviews(product, search_results, transcripts)
-        return transcripts, sentiment
-
-    print("Gathering YouTube video statistics...", flush=True)
-    try:
-        async with asyncio.TaskGroup() as task_group:
-            statistics_task = task_group.create_task(
-                _fetch_video_statistics(video_ids)
-            )
-            pipeline_task = task_group.create_task(_transcripts_and_sentiment())
-    except ExceptionGroup as exc_group:
-        # Surface the original error (e.g. HTTPException) to the caller.
-        raise exc_group.exceptions[0] from None
-
-    statistics = statistics_task.result()
-    transcripts, (analyses, summary) = pipeline_task.result()
+        analyses, summary = await analyze_youtube_reviews(
+            product, search_results, transcripts
+        )
+        statistics = await statistics_task
+    finally:
+        statistics_task.cancel()
 
     results = _merge_transcripts(search_results, transcripts)
     results = _merge_statistics(results, statistics)
@@ -388,7 +395,7 @@ async def _gather_youtube_results(
     results.update(summary)
 
     print("Filtering API results...", flush=True)
-    return filter_results(results)
+    yield {"type": "result", "data": filter_results(results)}
 
 
 def _ndjson(event: dict[str, Any]) -> bytes:
@@ -401,6 +408,7 @@ async def youtube(product: Product) -> StreamingResponse:
 
     Events, one JSON object per line:
       {"type": "videos", "videos": [{"url", "title", "channelTitle"}, ...]}
+          Only videos with a usable transcript; sent once transcripts are fetched.
       {"type": "result", "data": {"sentimentSummary", "sentimentSummaryError"?}}
       {"type": "error", "status": int, "error": str}   (sent instead of "result")
     """
@@ -411,15 +419,13 @@ async def youtube(product: Product) -> StreamingResponse:
     video_ids = _parse_video_ids(search_results)
 
     async def event_stream() -> AsyncIterator[bytes]:
-        yield _ndjson({"type": "videos", "videos": _video_previews(search_results)})
-
         try:
-            data = await _gather_youtube_results(product, search_results, video_ids)
+            async for event in _youtube_events(product, search_results, video_ids):
+                yield _ndjson(event)
         except HTTPException as exc:
             yield _ndjson(
                 {"type": "error", "status": exc.status_code, "error": exc.detail}
             )
-            return
         except Exception:
             traceback.print_exc()
             yield _ndjson(
@@ -429,9 +435,6 @@ async def youtube(product: Product) -> StreamingResponse:
                     "error": "YouTube analysis failed.",
                 }
             )
-            return
-
-        yield _ndjson({"type": "result", "data": data})
 
     return StreamingResponse(
         event_stream(),

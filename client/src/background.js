@@ -1,9 +1,43 @@
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 const API_ENDPOINTS = new Set(["prices", "shopping", "youtube"]);
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "api-request") {
     return false;
+  }
+
+  if (message.stream) {
+    const tabId = sender.tab?.id;
+    const frameId = sender.frameId;
+    const postEvent = (event) => {
+      if (tabId == null) {
+        return;
+      }
+      void chrome.tabs
+        .sendMessage(
+          tabId,
+          {
+            type: "api-stream-event",
+            requestId: message.requestId,
+            endpoint: message.endpoint,
+            event,
+          },
+          frameId != null ? { frameId } : undefined,
+        )
+        .catch(() => {});
+    };
+
+    void streamFromApi(message.endpoint, message.payload, postEvent)
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          status: 0,
+          error: error instanceof Error ? error.message : "API request failed.",
+        });
+      });
+
+    return true;
   }
 
   void postToApi(message.endpoint, message.payload)
@@ -65,62 +99,13 @@ async function readResponseBody(response) {
   return text ? { value: text } : null;
 }
 
-/**
- * Streaming requests use a long-lived port so the API can push several
- * messages (e.g. found videos first, Gemini results later) for one request.
- *
- * Messages posted back to the content script:
- *   { type: "event", event }                 one per NDJSON line
- *   { type: "error", status, error }         request failed
- *   { type: "end" }                          stream finished
- */
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== "api-stream") {
-    return;
-  }
-
-  const controller = new AbortController();
-  let disconnected = false;
-  port.onDisconnect.addListener(() => {
-    disconnected = true;
-    controller.abort();
-  });
-
-  const post = (message) => {
-    if (!disconnected) {
-      port.postMessage(message);
-    }
-  };
-
-  port.onMessage.addListener((message) => {
-    if (message?.type !== "api-request") {
-      return;
-    }
-
-    void streamFromApi(message.endpoint, message.payload, controller.signal, post)
-      .catch((error) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        post({
-          type: "error",
-          status: 0,
-          error: error instanceof Error ? error.message : "API request failed.",
-        });
-      })
-      .finally(() => {
-        post({ type: "end" });
-        if (!disconnected) {
-          port.disconnect();
-        }
-      });
-  });
-});
-
-async function streamFromApi(endpoint, payload, signal, post) {
+async function streamFromApi(endpoint, payload, onEvent) {
   if (!API_ENDPOINTS.has(endpoint)) {
-    post({ type: "error", status: 400, error: `Unknown API endpoint: ${endpoint}` });
-    return;
+    return {
+      ok: false,
+      status: 400,
+      error: `Unknown API endpoint: ${endpoint}`,
+    };
   }
 
   const response = await fetch(`${API_BASE_URL}/${endpoint}`, {
@@ -130,32 +115,42 @@ async function streamFromApi(endpoint, payload, signal, post) {
       Accept: "application/x-ndjson, application/json",
     },
     body: JSON.stringify(payload ?? {}),
-    signal,
   });
 
   const contentType = response.headers.get("content-type") ?? "";
 
   if (!response.ok || !contentType.includes("application/x-ndjson") || !response.body) {
-    // Non-streaming response: forward it as a single event.
     const data = await readResponseBody(response);
     if (!response.ok) {
-      post({
-        type: "error",
+      return {
+        ok: false,
         status: response.status,
         error: data?.detail ?? `API request failed with status ${response.status}.`,
-      });
-      return;
+      };
     }
-    post({ type: "event", event: { type: "result", data } });
-    return;
+    return { ok: true, status: response.status, data };
   }
 
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
+  let finalResult = null;
 
-  const flushLine = (line) => {
-    if (line.trim()) {
-      post({ type: "event", event: JSON.parse(line) });
+  const handleLine = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    const event = JSON.parse(trimmed);
+    if (event?.type === "result") {
+      finalResult = { ok: true, status: response.status, data: event.data };
+    } else if (event?.type === "error") {
+      finalResult = {
+        ok: false,
+        status: event.status ?? 500,
+        error: event.error ?? "API request failed.",
+      };
+    } else {
+      onEvent(event);
     }
   };
 
@@ -168,9 +163,17 @@ async function streamFromApi(endpoint, payload, signal, post) {
 
     let newline;
     while ((newline = buffer.indexOf("\n")) !== -1) {
-      flushLine(buffer.slice(0, newline));
+      handleLine(buffer.slice(0, newline));
       buffer = buffer.slice(newline + 1);
     }
   }
-  flushLine(buffer);
+  handleLine(buffer);
+
+  return (
+    finalResult ?? {
+      ok: false,
+      status: 502,
+      error: "API stream ended without a result.",
+    }
+  );
 }

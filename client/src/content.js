@@ -27,6 +27,8 @@ async function requestApi(endpoint, payload = {}) {
   return response.data;
 }
 
+let nextStreamRequestId = 1;
+
 /**
  * POST a streaming request through the service worker. Intermediate events
  * (e.g. `{type: "videos", videos}`) are passed to `onEvent` as they arrive; the
@@ -37,44 +39,36 @@ async function requestApi(endpoint, payload = {}) {
  * @param {(event: {type: string, [key: string]: unknown}) => void} [onEvent]
  * @returns {Promise<unknown>}
  */
-function requestApiStream(endpoint, payload = {}, onEvent = () => {}) {
+async function requestApiStream(endpoint, payload = {}, onEvent = () => {}) {
   if (!API_ENDPOINTS.has(endpoint)) {
-    return Promise.reject(new Error(`Unknown API endpoint: ${endpoint}`));
+    throw new Error(`Unknown API endpoint: ${endpoint}`);
   }
 
-  return new Promise((resolve, reject) => {
-    const port = chrome.runtime.connect({ name: "api-stream" });
-    let settled = false;
-    const settle = (fn, value) => {
-      if (!settled) {
-        settled = true;
-        fn(value);
-      }
-    };
+  const requestId = `stream-${nextStreamRequestId++}`;
+  const listener = (message) => {
+    if (message?.type === "api-stream-event" && message.requestId === requestId) {
+      onEvent(message.event);
+    }
+  };
 
-    port.onMessage.addListener((message) => {
-      if (message?.type === "event") {
-        const event = message.event;
-        if (event?.type === "result") {
-          settle(resolve, event.data);
-        } else if (event?.type === "error") {
-          settle(reject, new Error(event.error ?? "API request failed."));
-        } else {
-          onEvent(event);
-        }
-      } else if (message?.type === "error") {
-        settle(reject, new Error(message.error ?? "API request failed."));
-      } else if (message?.type === "end") {
-        settle(reject, new Error("API stream ended without a result."));
-      }
+  chrome.runtime.onMessage.addListener(listener);
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "api-request",
+      stream: true,
+      requestId,
+      endpoint,
+      payload,
     });
 
-    port.onDisconnect.addListener(() => {
-      settle(reject, new Error("API stream disconnected."));
-    });
+    if (!response?.ok) {
+      throw new Error(response?.error ?? "API request failed.");
+    }
 
-    port.postMessage({ type: "api-request", endpoint, payload });
-  });
+    return response.data;
+  } finally {
+    chrome.runtime.onMessage.removeListener(listener);
+  }
 }
 
 /**
