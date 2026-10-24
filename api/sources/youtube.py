@@ -23,6 +23,8 @@ YOUTUBE_VIDEOS_API_URL = "https://www.googleapis.com/youtube/v3/videos"
 YOUTUBE_WATCH_URL = "https://www.youtube.com/watch?v="
 YOUTUBE_API_KEY_ENV = "YOUTUBE_API_KEY"
 NON_SPEECH_PATTERN = re.compile(r"\[(music|applause|laughter|silence)\]", re.I)
+YOUTUBE_SEARCH_RESULT_LIMIT = 15
+TRANSCRIPT_BATCH_SIZE = 5
 
 
 def _build_search_params(query: str, api_key: str) -> dict[str, str | int]:
@@ -30,7 +32,8 @@ def _build_search_params(query: str, api_key: str) -> dict[str, str | int]:
         "part": "snippet",
         "q": query,
         "type": "video",
-        "maxResults": 5,
+        "maxResults": YOUTUBE_SEARCH_RESULT_LIMIT,
+        "order": "relevance",
         "relevanceLanguage": "en",
         "videoCaption": "closedCaption",  # vital!
         "key": api_key,
@@ -50,12 +53,13 @@ def _get_youtube_api_key() -> str:
 
 async def _search_youtube(product: Product) -> dict[str, Any]:
     api_key = _get_youtube_api_key()
-    query = product.title.strip()
-    if not query:
+    product_title = product.title.strip()
+    if not product_title:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="The product title must not be empty.",
         )
+    query = f"{product_title}"
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -107,6 +111,60 @@ def _parse_video_ids(payload: dict[str, Any]) -> list[str]:
             video_ids.append(video_id)
 
     return video_ids
+
+
+def _normalized_channel_name(value: str) -> str:
+    """Normalize brand/channel names while preserving whole-word boundaries."""
+    words = re.findall(r"[^\W_]+", html.unescape(value).casefold())
+    return " ".join(words)
+
+
+def _names_share_identity(brand: str, channel_title: str) -> bool:
+    """Match names by containment or by a shared distinctive leading root."""
+    normalized_brand = _normalized_channel_name(brand)
+    normalized_channel = _normalized_channel_name(channel_title)
+    if not normalized_brand or not normalized_channel:
+        return False
+
+    padded_brand = f" {normalized_brand} "
+    padded_channel = f" {normalized_channel} "
+    if padded_brand in padded_channel or padded_channel in padded_brand:
+        return True
+
+    brand_root = normalized_brand.split()[0]
+    channel_root = normalized_channel.split()[0]
+    return len(brand_root) >= 4 and brand_root == channel_root
+
+
+def _exclude_brand_owned_videos(
+    payload: dict[str, Any], product: Product
+) -> dict[str, Any]:
+    """Remove search results uploaded by a channel matching the product brand."""
+    if not product.brand:
+        return payload
+
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return payload
+
+    filtered_items = []
+    for item in items:
+        if not isinstance(item, dict):
+            filtered_items.append(item)
+            continue
+
+        snippet = item.get("snippet")
+        channel_title = (
+            snippet.get("channelTitle") if isinstance(snippet, dict) else None
+        )
+        is_brand_channel = (
+            isinstance(channel_title, str)
+            and _names_share_identity(product.brand, channel_title)
+        )
+        if not is_brand_channel:
+            filtered_items.append(item)
+
+    return {**payload, "items": filtered_items}
 
 
 def _parse_count(value: Any) -> int | None:
@@ -247,11 +305,21 @@ def _fetch_transcript(video_id: str) -> tuple[str, dict[str, Any]]:
 
 
 async def _fetch_transcripts(video_ids: list[str]) -> dict[str, dict[str, Any]]:
-    results = await asyncio.gather(
-        *(asyncio.to_thread(_fetch_transcript, video_id) for video_id in video_ids)
-    )
+    transcripts: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(video_ids), TRANSCRIPT_BATCH_SIZE):
+        batch = video_ids[start : start + TRANSCRIPT_BATCH_SIZE]
+        results = await asyncio.gather(
+            *(asyncio.to_thread(_fetch_transcript, video_id) for video_id in batch)
+        )
+        transcripts.update(results)
 
-    return dict(results)
+        usable_count = sum(
+            1 for result in transcripts.values() if _has_transcript(result)
+        )
+        if usable_count >= MAX_ANALYZED_VIDEOS:
+            break
+
+    return transcripts
 
 
 def _merge_transcripts(
@@ -351,6 +419,17 @@ def _video_previews(
         snippet = snippet if isinstance(snippet, dict) else {}
         title = snippet.get("title")
         channel_title = snippet.get("channelTitle")
+        thumbnails = snippet.get("thumbnails")
+        thumbnails = thumbnails if isinstance(thumbnails, dict) else {}
+        thumbnail = next(
+            (
+                candidate.get("url")
+                for size in ("default", "medium", "high")
+                if isinstance((candidate := thumbnails.get(size)), dict)
+                and isinstance(candidate.get("url"), str)
+            ),
+            None,
+        )
         previews.append(
             {
                 "url": f"{YOUTUBE_WATCH_URL}{video_id}",
@@ -360,6 +439,7 @@ def _video_previews(
                     if isinstance(channel_title, str)
                     else None
                 ),
+                "thumbnail": thumbnail,
             }
         )
         if len(previews) >= MAX_ANALYZED_VIDEOS:
@@ -407,7 +487,8 @@ async def youtube(product: Product) -> StreamingResponse:
     """Search YouTube for product reviews and stream results as NDJSON.
 
     Events, one JSON object per line:
-      {"type": "videos", "videos": [{"url", "title", "channelTitle"}, ...]}
+      {"type": "videos", "videos":
+        [{"url", "title", "channelTitle", "thumbnail"}, ...]}
           Only videos with a usable transcript; sent once transcripts are fetched.
       {"type": "result", "data": {"sentimentSummary", "sentimentSummaryError"?}}
       {"type": "error", "status": int, "error": str}   (sent instead of "result")
@@ -416,6 +497,7 @@ async def youtube(product: Product) -> StreamingResponse:
     # a normal HTTP error status.
     print("Gathering YouTube videos...", flush=True)
     search_results = await _search_youtube(product)
+    search_results = _exclude_brand_owned_videos(search_results, product)
     video_ids = _parse_video_ids(search_results)
 
     async def event_stream() -> AsyncIterator[bytes]:
