@@ -9,14 +9,15 @@ python3 -m pip install -r api/requirements.txt
 python3 -m uvicorn api.main:app --reload
 ```
 
-The placeholder API routes are available at:
+The test API routes are available at:
 
 - `POST /api/prices`
 - `POST /api/shopping`
 - `POST /api/youtube`
 
-They currently return `501 Not Implemented`. Requests from
-`http://localhost:3000` are allowed by the CORS configuration.
+Each route waits for a random 1–5 second asynchronous delay and then returns its
+source name, elapsed test delay, and the submitted product payload. Requests
+from `http://localhost:3000` are allowed by the CORS configuration.
 
 ## Chrome extension
 
@@ -30,11 +31,18 @@ const result = await globalThis.api.prices({ query: "headphones" });
 ```
 
 The extension only runs on Amazon pages. It parses the default product once
-when the page loads:
+when the page loads, sends that product to all three API endpoints concurrently,
+and logs each outcome as soon as that individual request finishes:
 
 ```js
 console.log(globalThis.product);
+const allResults = await globalThis.api.researchProduct(globalThis.product);
 ```
+
+Each endpoint outcome has an `ok` flag and either `data` or `error`, so one
+failed source does not hide responses from the other sources. The returned
+promise still provides the combined outcomes if a caller needs to wait for all
+sources.
 
 The parser returns a canonical ASIN URL, title, brand, model, selected variant,
 structured variant values, numeric price, ISO currency code, and HTTPS image
