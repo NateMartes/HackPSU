@@ -122,13 +122,20 @@ setTimeout(async () => {
     return;
   }
 
-  await requestProductResearch(
-    product,
-    (endpoint, result) => {
-      console.log(`${endpoint} API result:`, result);
-    },
-    (endpoint, event) => {
-      console.log(`${endpoint} API update (${event.type}):`, event);
-    },
-  );
+  const analysisUI = globalThis.productAnalysisUI?.mount(product);
+
+  try {
+    const result = await globalThis.api.youtube(product, (event) => {
+      console.log(`youtube API update (${event.type}):`, event);
+      analysisUI?.handleEvent(event);
+    });
+
+    console.log("youtube API result:", result);
+    analysisUI?.showResult(result);
+  } catch (error) {
+    console.error("youtube API failed:", error);
+    analysisUI?.showError(
+      error instanceof Error ? error.message : "We could not finish this analysis.",
+    );
+  }
 }, 1000);
