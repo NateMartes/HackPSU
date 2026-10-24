@@ -1,1 +1,26 @@
-
+{
+  "manifest_version": 3,
+  "name": "HackPSU",
+  "description": "Product research assistance while you shop.",
+  "version": "0.1.0",
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "src/content.js",
+        "src/ui.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
