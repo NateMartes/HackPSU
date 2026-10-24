@@ -6,6 +6,7 @@ Install and run the API from the repository root:
 
 ```bash
 python3 -m pip install -r api/requirements.txt
+export YOUTUBE_API_KEY="your-youtube-data-api-key"
 python3 -m uvicorn api.main:app --reload
 ```
 
@@ -15,9 +16,12 @@ The test API routes are available at:
 - `POST /api/shopping`
 - `POST /api/youtube`
 
-Each route waits for a random 1–5 second asynchronous delay and then returns its
-source name, elapsed test delay, and the submitted product payload. Requests
-from `http://localhost:3000` are allowed by the CORS configuration.
+The YouTube route searches the YouTube Data API v3 for the submitted product's
+`title` and requires `YOUTUBE_API_KEY` in the API process environment.
+
+The price and shopping routes are still placeholders and return `501 Not
+Implemented`. Requests from `http://localhost:3000` are allowed by the CORS
+configuration.
 
 ## Chrome extension
 
