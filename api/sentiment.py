@@ -14,7 +14,13 @@ from api.type import Product
 
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
 GEMINI_MODEL_ENV = "GEMINI_MODEL"
+GEMINI_SUMMARY_MODEL_ENV = "GEMINI_SUMMARY_MODEL"
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+DEFAULT_GEMINI_SUMMARY_MODEL = "gemini-3.1-flash-lite"
+# Only the top-N videos with usable transcripts are sent to Gemini.
+MAX_ANALYZED_VIDEOS = 3
+GEMINI_MAX_RETRIES = 2
+RETRYABLE_STATUS_CODES = {429, 500, 503}
 SentimentLabel = Literal["positive", "neutral", "negative"]
 
 
@@ -58,8 +64,8 @@ specified product. Ignore introductions, unrelated products, calls to action,
 and general channel discussion. Preserve mixed opinions by evaluating each
 product aspect separately. Evidence must be a short, exact excerpt copied from
 the transcript. Return no aspect when there is no exact supporting evidence.
-Use scores as sentiment intensity: -1 is negative, 0 is neutral, and
-1 is positive.
+Use scores as sentiment intensity: -1 is strongly negative, 0 is neutral, and
+1 is strongly positive.
 """.strip()
 
 SUMMARY_INSTRUCTIONS = """
@@ -85,6 +91,42 @@ def _get_gemini_api_key() -> str:
 def _get_gemini_model() -> str:
     configured_model = os.getenv(GEMINI_MODEL_ENV, DEFAULT_GEMINI_MODEL).strip()
     return configured_model or DEFAULT_GEMINI_MODEL
+
+
+def _get_gemini_summary_model() -> str:
+    configured_model = os.getenv(
+        GEMINI_SUMMARY_MODEL_ENV, DEFAULT_GEMINI_SUMMARY_MODEL
+    ).strip()
+    return configured_model or DEFAULT_GEMINI_SUMMARY_MODEL
+
+
+def _format_analysis_error(exc: errors.APIError | ValidationError | ValueError) -> str:
+    if isinstance(exc, errors.APIError):
+        status = exc.status or type(exc).__name__
+        return f"{type(exc).__name__}({exc.code} {status})"
+    if isinstance(exc, ValidationError):
+        return f"ValidationError({exc.error_count()} errors)"
+    return f"{type(exc).__name__}({exc})"
+
+
+async def _generate_content(client: Any, **kwargs: Any) -> Any:
+    """Call Gemini, retrying briefly on rate limits and transient server errors."""
+    for attempt in range(GEMINI_MAX_RETRIES + 1):
+        try:
+            return await client.models.generate_content(**kwargs)
+        except errors.APIError as exc:
+            if exc.code not in RETRYABLE_STATUS_CODES or attempt == GEMINI_MAX_RETRIES:
+                # Full message names the exact quota (per-minute/day, requests/tokens).
+                print(f"  Gemini error detail: {exc.message}", flush=True)
+                raise
+            delay = 2**attempt
+            print(
+                f"  Gemini {exc.code}; retrying in {delay}s "
+                f"({attempt + 1}/{GEMINI_MAX_RETRIES})...",
+                flush=True,
+            )
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _label_for_score(score: float) -> SentimentLabel:
@@ -161,7 +203,8 @@ async def _analyze_video(
         f"Video title:\n{video_title or 'Unknown'}\n\n"
         f"Transcript:\n<transcript>{transcript}</transcript>"
     )
-    response = await client.models.generate_content(
+    response = await _generate_content(
+        client,
         model=model,
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -186,7 +229,8 @@ async def _summarize_analyses(
         "Independent review analyses:\n"
         f"{json.dumps(analyses, ensure_ascii=False)}"
     )
-    response = await client.models.generate_content(
+    response = await _generate_content(
+        client,
         model=model,
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -235,12 +279,25 @@ async def analyze_youtube_reviews(
         if isinstance(text, str) and text.strip():
             candidates.append((video_id, titles.get(video_id), text))
 
+    # Transcripts are in search-relevance order; only analyze the top few.
+    candidates = candidates[:MAX_ANALYZED_VIDEOS]
+
     if not candidates:
-        return {}, {"sentimentSummary": None}
+        return {}, {
+            "sentimentSummary": None,
+            "sentimentSummaryError": "No usable transcripts were found.",
+        }
 
     model = _get_gemini_model()
+    summary_model = _get_gemini_summary_model()
     analyses: dict[str, dict[str, Any]] = {}
     successful_analyses = []
+    failures: list[str] = []
+
+    print(
+        f"Running per-video sentiment analysis ({len(candidates)} transcripts)...",
+        flush=True,
+    )
 
     async with genai.Client(api_key=_get_gemini_api_key()).aio as client:
         results = await asyncio.gather(
@@ -253,10 +310,10 @@ async def analyze_youtube_reviews(
 
         for (video_id, title, _), result in zip(candidates, results, strict=True):
             if isinstance(result, (errors.APIError, ValidationError, ValueError)):
-                analyses[video_id] = {
-                    "sentiment": None,
-                    "sentimentError": type(result).__name__,
-                }
+                error = _format_analysis_error(result)
+                print(f"  Sentiment analysis failed for {video_id}: {error}", flush=True)
+                failures.append(error)
+                analyses[video_id] = {"sentiment": None, "sentimentError": error}
                 continue
             if isinstance(result, BaseException):
                 raise result
@@ -266,16 +323,24 @@ async def analyze_youtube_reviews(
             successful_analyses.append({"videoTitle": title, "sentiment": dumped})
 
         if not successful_analyses:
-            return analyses, {"sentimentSummary": None}
-
-        try:
-            summary = await _summarize_analyses(
-                client, model, product, successful_analyses
-            )
-        except (errors.APIError, ValidationError, ValueError) as exc:
             return analyses, {
                 "sentimentSummary": None,
-                "sentimentSummaryError": type(exc).__name__,
+                "sentimentSummaryError": (
+                    "All per-video analyses failed: " + ", ".join(failures)
+                ),
+            }
+
+        print("Building cross-video sentiment summary...", flush=True)
+        try:
+            summary = await _summarize_analyses(
+                client, summary_model, product, successful_analyses
+            )
+        except (errors.APIError, ValidationError, ValueError) as exc:
+            error = _format_analysis_error(exc)
+            print(f"  Cross-video summary failed: {error}", flush=True)
+            return analyses, {
+                "sentimentSummary": None,
+                "sentimentSummaryError": error,
             }
 
     return analyses, {"sentimentSummary": summary.model_dump()}

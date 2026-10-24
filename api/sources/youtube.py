@@ -1,11 +1,15 @@
 import asyncio
 import html
+import json
 import os
 import re
+import traceback
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from youtube_transcript_api import YouTubeTranscriptApi, YouTubeTranscriptApiException
 
 from api.sentiment import analyze_youtube_reviews
@@ -16,6 +20,7 @@ router = APIRouter(tags=["youtube"])
 
 YOUTUBE_SEARCH_API_URL = "https://www.googleapis.com/youtube/v3/search"
 YOUTUBE_VIDEOS_API_URL = "https://www.googleapis.com/youtube/v3/videos"
+YOUTUBE_WATCH_URL = "https://www.youtube.com/watch?v="
 YOUTUBE_API_KEY_ENV = "YOUTUBE_API_KEY"
 NON_SPEECH_PATTERN = re.compile(r"\[(music|applause|laughter|silence)\]", re.I)
 
@@ -25,7 +30,7 @@ def _build_search_params(query: str, api_key: str) -> dict[str, str | int]:
         "part": "snippet",
         "q": query,
         "type": "video",
-        "maxResults": 3,
+        "maxResults": 5,
         "relevanceLanguage": "en",
         "videoCaption": "closedCaption",  # vital!
         "key": api_key,
@@ -232,6 +237,7 @@ def _fetch_transcript(video_id: str) -> tuple[str, dict[str, Any]]:
             }
         }
     except YouTubeTranscriptApiException as exc:
+        print(f"  No transcript for {video_id}: {type(exc).__name__}", flush=True)
         result = {
             "transcript": None,
             "transcriptError": type(exc).__name__,
@@ -290,41 +296,145 @@ def _merge_sentiment(
     return payload
 
 
-def filter_data(payload: dict[str, Any]) -> dict[str, Any]:
-    payload.pop("etag", None)
+def _video_id_from_item(item: dict[str, Any]) -> str | None:
+    identifier = item.get("id")
+    if not isinstance(identifier, dict):
+        return None
+    video_id = identifier.get("videoId")
+    return video_id if isinstance(video_id, str) else None
 
-    items = payload.get("items")
-    if not isinstance(items, list):
-        return payload
 
-    for item in items:
+def _public_sentiment_summary(summary: Any) -> Any:
+    if not isinstance(summary, dict):
+        return summary
+    return {key: summary[key] for key in ("label", "score", "summary") if key in summary}
+
+
+def filter_results(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep a compact sentiment summary only.
+
+    Videos are already sent to the client in the earlier "videos" event.
+    """
+    filtered: dict[str, Any] = {
+        "sentimentSummary": _public_sentiment_summary(payload.get("sentimentSummary")),
+    }
+    summary_error = payload.get("sentimentSummaryError")
+    if isinstance(summary_error, str) and summary_error:
+        filtered["sentimentSummaryError"] = summary_error
+
+    return filtered
+
+
+def _video_previews(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build lightweight video cards from the search results alone."""
+    previews: list[dict[str, Any]] = []
+    for item in payload.get("items", []):
         if not isinstance(item, dict):
             continue
-
-        item.pop("id", None)
-        item.pop("etag", None)
+        video_id = _video_id_from_item(item)
+        if not video_id:
+            continue
 
         snippet = item.get("snippet")
-        if isinstance(snippet, dict):
-            snippet.pop("thumbnails", None)
+        snippet = snippet if isinstance(snippet, dict) else {}
+        title = snippet.get("title")
+        channel_title = snippet.get("channelTitle")
+        previews.append(
+            {
+                "url": f"{YOUTUBE_WATCH_URL}{video_id}",
+                "title": html.unescape(title) if isinstance(title, str) else None,
+                "channelTitle": (
+                    html.unescape(channel_title)
+                    if isinstance(channel_title, str)
+                    else None
+                ),
+            }
+        )
+    return previews
 
-    return payload
 
+async def _gather_youtube_results(
+    product: Product, search_results: dict[str, Any], video_ids: list[str]
+) -> dict[str, Any]:
+    """Fetch statistics, transcripts and sentiment for already-found videos."""
 
-@router.post("/youtube")
-async def youtube(product: Product) -> dict[str, Any]:
-    """Search YouTube for videos related to the submitted product."""
-    search_results = await _search_youtube(product)
-    video_ids = _parse_video_ids(search_results)
-    transcripts, statistics = await asyncio.gather(
-        _fetch_transcripts(video_ids),
-        _fetch_video_statistics(video_ids),
-    )
-    analyses, summary = await analyze_youtube_reviews(
-        product, search_results, transcripts
-    )
+    async def _transcripts_and_sentiment() -> tuple[
+        dict[str, dict[str, Any]],
+        tuple[dict[str, dict[str, Any]], dict[str, Any]],
+    ]:
+        print("Gathering YouTube transcripts...", flush=True)
+        transcripts = await _fetch_transcripts(video_ids)
+        print("Analyzing review sentiment...", flush=True)
+        sentiment = await analyze_youtube_reviews(product, search_results, transcripts)
+        return transcripts, sentiment
+
+    print("Gathering YouTube video statistics...", flush=True)
+    try:
+        async with asyncio.TaskGroup() as task_group:
+            statistics_task = task_group.create_task(
+                _fetch_video_statistics(video_ids)
+            )
+            pipeline_task = task_group.create_task(_transcripts_and_sentiment())
+    except ExceptionGroup as exc_group:
+        # Surface the original error (e.g. HTTPException) to the caller.
+        raise exc_group.exceptions[0] from None
+
+    statistics = statistics_task.result()
+    transcripts, (analyses, summary) = pipeline_task.result()
+
     results = _merge_transcripts(search_results, transcripts)
     results = _merge_statistics(results, statistics)
     results = _merge_sentiment(results, analyses)
     results.update(summary)
-    return filter_data(results)
+
+    print("Filtering API results...", flush=True)
+    return filter_results(results)
+
+
+def _ndjson(event: dict[str, Any]) -> bytes:
+    return (json.dumps(event, separators=(",", ":")) + "\n").encode()
+
+
+@router.post("/youtube")
+async def youtube(product: Product) -> StreamingResponse:
+    """Search YouTube for product reviews and stream results as NDJSON.
+
+    Events, one JSON object per line:
+      {"type": "videos", "videos": [{"url", "title", "channelTitle"}, ...]}
+      {"type": "result", "data": {"sentimentSummary", "sentimentSummaryError"?}}
+      {"type": "error", "status": int, "error": str}   (sent instead of "result")
+    """
+    # Search before opening the stream so config/search failures still return
+    # a normal HTTP error status.
+    print("Gathering YouTube videos...", flush=True)
+    search_results = await _search_youtube(product)
+    video_ids = _parse_video_ids(search_results)
+
+    async def event_stream() -> AsyncIterator[bytes]:
+        yield _ndjson({"type": "videos", "videos": _video_previews(search_results)})
+
+        try:
+            data = await _gather_youtube_results(product, search_results, video_ids)
+        except HTTPException as exc:
+            yield _ndjson(
+                {"type": "error", "status": exc.status_code, "error": exc.detail}
+            )
+            return
+        except Exception:
+            traceback.print_exc()
+            yield _ndjson(
+                {
+                    "type": "error",
+                    "status": status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    "error": "YouTube analysis failed.",
+                }
+            )
+            return
+
+        yield _ndjson({"type": "result", "data": data})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

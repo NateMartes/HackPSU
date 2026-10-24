@@ -1,4 +1,6 @@
 const API_ENDPOINTS = new Set(["prices", "shopping", "youtube"]);
+// Endpoints that respond with NDJSON progress events before their final result.
+const STREAMING_ENDPOINTS = new Set(["youtube"]);
 
 /**
  * POST a request through the extension service worker and wait for the API.
@@ -26,20 +28,75 @@ async function requestApi(endpoint, payload = {}) {
 }
 
 /**
+ * POST a streaming request through the service worker. Intermediate events
+ * (e.g. `{type: "videos", videos}`) are passed to `onEvent` as they arrive; the
+ * promise resolves with the data from the final `{type: "result"}` event.
+ *
+ * @param {"prices" | "shopping" | "youtube"} endpoint
+ * @param {unknown} payload
+ * @param {(event: {type: string, [key: string]: unknown}) => void} [onEvent]
+ * @returns {Promise<unknown>}
+ */
+function requestApiStream(endpoint, payload = {}, onEvent = () => {}) {
+  if (!API_ENDPOINTS.has(endpoint)) {
+    return Promise.reject(new Error(`Unknown API endpoint: ${endpoint}`));
+  }
+
+  return new Promise((resolve, reject) => {
+    const port = chrome.runtime.connect({ name: "api-stream" });
+    let settled = false;
+    const settle = (fn, value) => {
+      if (!settled) {
+        settled = true;
+        fn(value);
+      }
+    };
+
+    port.onMessage.addListener((message) => {
+      if (message?.type === "event") {
+        const event = message.event;
+        if (event?.type === "result") {
+          settle(resolve, event.data);
+        } else if (event?.type === "error") {
+          settle(reject, new Error(event.error ?? "API request failed."));
+        } else {
+          onEvent(event);
+        }
+      } else if (message?.type === "error") {
+        settle(reject, new Error(message.error ?? "API request failed."));
+      } else if (message?.type === "end") {
+        settle(reject, new Error("API stream ended without a result."));
+      }
+    });
+
+    port.onDisconnect.addListener(() => {
+      settle(reject, new Error("API stream disconnected."));
+    });
+
+    port.postMessage({ type: "api-request", endpoint, payload });
+  });
+}
+
+/**
  * Request every product research source concurrently and wait for all of them.
  * A failed source is returned alongside successful sources instead of preventing
  * the remaining responses from being reported.
  *
  * @param {Record<string, unknown>} product
  * @param {(endpoint: string, result: {ok: true, data: unknown} | {ok: false, error: string}) => void} [onResult]
+ * @param {(endpoint: string, event: {type: string, [key: string]: unknown}) => void} [onProgress]
+ *   Called with partial updates from streaming sources (e.g. YouTube videos
+ *   found before Gemini analysis has finished).
  * @returns {Promise<Record<string, {ok: true, data: unknown} | {ok: false, error: string}>>}
  */
-async function requestProductResearch(product, onResult = () => {}) {
+async function requestProductResearch(product, onResult = () => {}, onProgress = () => {}) {
   const requests = [...API_ENDPOINTS].map(async (endpoint) => {
     let result;
 
     try {
-      const data = await requestApi(endpoint, product);
+      const data = STREAMING_ENDPOINTS.has(endpoint)
+        ? await requestApiStream(endpoint, product, (event) => onProgress(endpoint, event))
+        : await requestApi(endpoint, product);
       result = { ok: true, data };
     } catch (error) {
       result = {
@@ -58,7 +115,7 @@ async function requestProductResearch(product, onResult = () => {}) {
 globalThis.api = Object.freeze({
   prices: (payload) => requestApi("prices", payload),
   shopping: (payload) => requestApi("shopping", payload),
-  youtube: (payload) => requestApi("youtube", payload),
+  youtube: (payload, onEvent) => requestApiStream("youtube", payload, onEvent),
   researchProduct: requestProductResearch,
 });
 
@@ -71,7 +128,13 @@ setTimeout(async () => {
     return;
   }
 
-  await requestProductResearch(product, (endpoint, result) => {
-    console.log(`${endpoint} API result:`, result);
-  });
+  await requestProductResearch(
+    product,
+    (endpoint, result) => {
+      console.log(`${endpoint} API result:`, result);
+    },
+    (endpoint, event) => {
+      console.log(`${endpoint} API update (${event.type}):`, event);
+    },
+  );
 }, 1000);
