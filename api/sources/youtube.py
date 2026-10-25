@@ -702,6 +702,8 @@ async def youtube(product: Product) -> StreamingResponse:
         [{"url", "title", "channelTitle", "thumbnail"}, ...]}
           Only videos with a usable transcript; sent once transcripts are fetched.
       {"type": "analysis-started", "reviewIndex", "reviewCount", "videoTitle"}
+      {"type": "gpu-analysis", "stage": "evidence-prepared", "reviewIndex",
+       "reviewCount", "videoTitle", "localModel"}
       {"type": "analysis-delta", "reviewIndex", "reviewCount", "videoTitle", "delta"}
           Tagged partial structured output from cloud Gemini.
       {"type": "analysis-result", "reviewIndex", "reviewCount", "videoTitle", "sentiment"}

@@ -186,6 +186,8 @@ setTimeout(async () => {
     } else if (event?.type === "analysis") {
       console.log("price analysis update:", event);
       analysisUI?.showPriceAnalysis(event.analysis);
+    } else if (event?.type === "gpu-analysis") {
+      console.log("price GPU update:", event);
     }
   }).then((result) => {
     console.log("price API result:", result);
@@ -204,6 +206,8 @@ setTimeout(async () => {
     } else if (event?.type === "analysis") {
       console.log("shopping analysis update:", event);
       analysisUI?.showShoppingAnalysis(event.analysis);
+    } else if (event?.type === "gpu-analysis") {
+      console.log("shopping GPU update:", event);
     }
   }).then((result) => {
     console.log("shopping API result:", result);

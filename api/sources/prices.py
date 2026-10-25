@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from serpapi import GoogleSearch
 
+from api.local_models import prepare_texts
 from api.sentiment import analyze_price_information
 from api.type import Product
 
@@ -82,6 +83,7 @@ async def prices(product: Product) -> StreamingResponse:
 
     Events, one JSON object per line:
       {"type": "price-information", "data": {"current_price", "currency", "offers"}}
+      {"type": "gpu-analysis", "stage": "offers-ranked", "data": {...}}
       {"type": "analysis", "analysis": {"label", "score", "summary", "aspects"}}
       {"type": "result", "data": {price information plus "analysis"}}
       {"type": "error", "status": int, "error": str} (instead of analysis/result)
@@ -101,7 +103,39 @@ async def prices(product: Product) -> StreamingResponse:
         )
 
         try:
-            analysis = await analyze_price_information(product, price_information)
+            product_identity = " ".join(
+                value.strip()
+                for value in (product.brand, product.title, product.model, product.variant)
+                if isinstance(value, str) and value.strip()
+            )
+            query = f"Exact matching retail offer for {product_identity}"
+            offer_records = [
+                offer
+                for offer in price_information.get("offers", [])
+                if isinstance(offer, dict)
+                and isinstance(offer.get("title"), str)
+                and offer["title"].strip()
+            ]
+            prepared = await prepare_texts(
+                query,
+                [offer["title"] for offer in offer_records],
+                limit=12,
+                classify=False,
+            )
+            selected_offers = [
+                offer_records[index] for index in prepared.selected_indices
+            ]
+            analysis_input = {**price_information, "offers": selected_offers}
+            local_model = prepared.metadata()
+            yield _ndjson(
+                {
+                    "type": "gpu-analysis",
+                    "stage": "offers-ranked",
+                    "data": local_model,
+                }
+            )
+
+            analysis = await analyze_price_information(product, analysis_input)
             dumped_analysis = analysis.model_dump()
             yield _ndjson({"type": "analysis", "analysis": dumped_analysis})
             yield _ndjson(
@@ -110,6 +144,7 @@ async def prices(product: Product) -> StreamingResponse:
                     "data": {
                         **complete_price_information,
                         "analysis": dumped_analysis,
+                        "localModel": local_model,
                     },
                 }
             )

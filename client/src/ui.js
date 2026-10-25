@@ -1043,6 +1043,16 @@
 
     function handleAnalysisEvent(event) {
       const reviewCount = Number(event?.reviewCount) || 0;
+      if (event?.type === "gpu-analysis") {
+        const prepared = Math.min(Number(event.reviewIndex) + 1 || 1, reviewCount || 1);
+        showProcessing(
+          reviewCount > 1
+            ? `Preparing review evidence… ${prepared} of ${reviewCount}`
+            : "Preparing review evidence…",
+        );
+        return;
+      }
+
       if (event?.type === "analysis-result" && event.sentiment) {
         streamedAnalyses.set(event.reviewIndex, {
           videoTitle: event.videoTitle,
