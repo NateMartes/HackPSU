@@ -1,7 +1,6 @@
-from itertools import product
-
 from fastapi import APIRouter, HTTPException, status
 import os
+from api.type import Product
 from serpapi import GoogleSearch
 
 
@@ -9,7 +8,7 @@ router = APIRouter(tags=["shopping"])
 
 
 @router.post("/shopping", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-async def shopping() -> None:
+async def shopping(product: Product) -> None:
     #"""Placeholder for shopping result lookup."""
     serpapi_key = os.environ["SERPAPI_KEY"]
     if not serpapi_key:
@@ -17,7 +16,7 @@ async def shopping() -> None:
             status_code=503,
             detail="SERPAPI_KEY is not configured.",
         )
-    title = "Sony WH-1000XM5 Wireless Headphones"
+    title = product.title
     
     shopping = GoogleSearch({
     "engine": "google_shopping",
@@ -33,8 +32,8 @@ async def shopping() -> None:
         raise HTTPException(status_code=404, detail="No shopping results found.")
 
     # Choose the first result that has a rating; otherwise use the first result.
-    product = next((item for item in results if item.get("rating")), results[0])
-    product_id = product.get("product_id")
+    result = next((item for item in results if item.get("rating")), results[0])
+    product_id = result.get("product_id")
     if not product_id:
         raise HTTPException(status_code=404, detail="No product ID found.")
     
@@ -64,8 +63,7 @@ async def shopping() -> None:
     ]
 
     return {
-        "status": 202,
-        "rating": product_data.get("rating", product.get("rating")),
-        "reviews": product_data.get("reviews", product.get("reviews")),
+        "rating": product_data.get("rating", result.get("rating")),
+        "reviews": product_data.get("reviews", result.get("reviews")),
         "review_details": review_details,
     }
