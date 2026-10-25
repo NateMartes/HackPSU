@@ -8,6 +8,7 @@ Install and run the API from the repository root:
 python3 -m pip install -r api/requirements.txt
 export YOUTUBE_API_KEY="your-youtube-data-api-key"
 export GEMINI_API_KEY="your-gemini-api-key"
+export SERP_API_KEY="your-serp-api-key"
 # Optional: export GEMINI_MODEL="gemini-3.8-flash"
 python3 -m uvicorn api.main:app --reload
 ```
