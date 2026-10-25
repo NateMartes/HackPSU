@@ -6,7 +6,7 @@ from api.sources.shopping import router as shopping_router
 from api.sources.youtube import router as youtube_router
 
 
-app = FastAPI(title="HackPSU API")
+app = FastAPI(title="P.R.V.S.A. — Price Review Video Sentiment Aggregator API")
 
 app.add_middleware(
     CORSMiddleware,

@@ -1,130 +1,210 @@
-# HackPSU
+<p align="left">
+  <img src="client/assets/icons/prvsa-128.png" width="128" height="128" alt="P.R.V.S.A. prism logo">
+</p>
 
-## API
+<h1 align="left">P.R.V.S.A.</h1>
 
-Install and run the API from the repository root:
+<p align="left">
+  <strong>Price Review Video Sentiment Aggregator</strong><br>
+  A clearer answer to the question behind every product page: <em>is this actually worth buying?</em>
+</p>
+
+P.R.V.S.A. is a Chrome extension that researches an Amazon product while you
+shop. It compares prices, reads product reviews, analyzes independent YouTube
+reviews, and brings the evidence together in one on-page report.
+
+## Why we built it
+
+Most shopping assistants solve only one part of the decision. Coupon tools find
+discounts, price trackers show historical changes, and review aggregators count
+stars. Those signals are useful, but they rarely explain *why* a product is good
+or bad—and they usually ignore the detailed, hands-on opinions found in video
+reviews.
+
+P.R.V.S.A. was built to provide context instead of another isolated metric. It
+looks beyond the store currently selling the product, combines different kinds
+of evidence, and filters out brand-owned videos to reduce sponsorship and
+platform bias. The result is a faster, more informed purchasing decision.
+
+## Features
+
+### One report, directly on Amazon
+
+Open an Amazon product page and P.R.V.S.A. adds a compact analysis panel without
+sending you through a collection of tabs. Results stream into the panel as each
+source finishes, so useful information appears without waiting for the entire
+research process.
+
+### Independent video-review analysis
+
+P.R.V.S.A. searches YouTube for relevant, captioned product reviews and excludes
+channels associated with the product's brand. Gemini then analyzes the available
+transcripts for overall and aspect-level sentiment, with evidence tied back to
+the transcript.
+
+### Written-review context
+
+Ratings alone do not explain recurring complaints or strengths. P.R.V.S.A.
+collects ratings, review counts, and review excerpts from Google Products, then
+summarizes the product-specific themes behind them. Evidence is retained only
+when it can be verified against the supplied review text.
+
+### Comparable-price research
+
+The extension searches Google Shopping for comparable offers and evaluates the
+current Amazon price in context. It shows the offers immediately, followed by a
+price-value score and explanation once analysis is complete.
+
+### Transparent combined score
+
+Each source keeps its own score on a `-1` to `+1` scale. The final score uses
+fixed weights:
+
+| Signal | Weight |
+| --- | ---: |
+| YouTube video reviews | 45% |
+| Google Products reviews | 35% |
+| Price value | 20% |
+
+Neutral or unavailable sources are excluded and the remaining weights are
+rebalanced. If every available source is neutral, the final result remains
+neutral—the extension does not invent a stronger opinion.
+
+### Optional on-device summary
+
+When Chrome's built-in Gemini Nano Prompt API is already available, P.R.V.S.A.
+uses it to stream a short cross-source summary. This step runs on-device, does
+not require another API key, and cannot change the source scores. P.R.V.S.A.
+does not trigger a model download when Nano is unavailable.
+
+## Quickstart
+
+### 1. Start the API
+
+P.R.V.S.A. requires Python 3.10 or newer and API keys for
+[Gemini](https://ai.google.dev/gemini-api/docs/api-key),
+[YouTube Data API v3](https://developers.google.com/youtube/v3/getting-started),
+and [SerpApi](https://serpapi.com/).
+
+From the repository root:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python3 -m pip install -r api/requirements.txt
-export YOUTUBE_API_KEY="your-youtube-data-api-key"
+
 export GEMINI_API_KEY="your-gemini-api-key"
-# Optional Webshare Residential proxy credentials:
-export YOUTUBE_PROXY_USERNAME="your-webshare-proxy-username"
-export YOUTUBE_PROXY_PASSWORD="your-webshare-proxy-password"
-# Optional: export GEMINI_MODEL="gemini-3.1-flash-lite"
+export YOUTUBE_API_KEY="your-youtube-data-api-key"
+export SERPAPI_KEY="your-serpapi-key"
+
 python3 -m uvicorn api.main:app --reload
 ```
 
-The test API routes are available at:
+The backend is now available at `http://127.0.0.1:8000`. Keep this terminal
+running while using the extension.
 
-- `POST /api/prices`
-- `POST /api/shopping`
-- `POST /api/youtube`
+### 2. Load the Chrome extension
 
-The YouTube route searches the YouTube Data API v3 for up to 15 captioned,
-relevance-ranked reviews of the submitted product, retrieves an English
-transcript for each result when one is available,
-aggregates it into normalized timestamp-free text, and adds each video's view
-count, like count, like-to-view percentage, and views per like. Its stream sends
-lightweight video previews (link, title, channel, and thumbnail), tagged Gemini
-generation deltas, and each completed review analysis before the final result so
-the extension can replace its score and Video Analysis skeletons progressively.
-Results uploaded by a
-channel whose name matches, contains, or shares a distinctive leading root with
-the product brand are excluded before transcript collection and analysis. It
-checks transcript candidates in relevance-ordered batches until it finds three
-usable independent reviews or exhausts the search results. It requires
-`YOUTUBE_API_KEY` and `GEMINI_API_KEY` in the API process environment. Cloud
-Gemini analyzes each transcript concurrently for product-specific overall and
-aspect sentiment and verifies aspect evidence against the transcript. The API
-returns those existing review analyses to the extension; it does not make a
-second cloud-model call for the cross-video summary. Set `GEMINI_MODEL` to
-override the default `gemini-3.1-flash-lite` model. The final response omits
-YouTube's video IDs, thumbnails, transcripts, and ETags because the earlier
-preview event already contains the display data the client needs.
+1. Open `chrome://extensions` in Chrome.
+2. Turn on **Developer mode**.
+3. Select **Load unpacked**.
+4. Choose this repository's `client` directory.
 
-If YouTube blocks the API host's IP, set both `YOUTUBE_PROXY_USERNAME` and
-`YOUTUBE_PROXY_PASSWORD` to credentials from a Webshare **Residential** proxy
-plan. Transcript requests will then use Webshare's rotating US residential IPs.
-The backend uses a direct connection when neither variable is present and
-returns a configuration error if only one is set. Keep these credentials in the
-backend environment; never add them to the Chrome extension or commit them.
+### 3. Analyze a product
 
-The shopping route fetches product rating and review information through
-SerpApi and streams that data immediately as a `shopping-information` NDJSON
-event. Shopping candidates are ranked against the requested brand, model, and
-title. Product details use the exact offer token first, fall back to the product
-ID, and try up to three candidates when Google returns an empty product page.
-The route then sends the complete collected payload to Gemini in one request,
-streams the schema-validated analysis, and finishes with a `result` event.
-Specific aspect evidence is retained only when it is an exact excerpt from the
-supplied review text. It requires `SERPAPI_KEY` and `GEMINI_API_KEY`. The price
-route collects Google Shopping offers and asks Gemini to assess whether the
-current product price is favorable relative to genuinely comparable offers.
-It streams the collected offers immediately as a `price-information` NDJSON
-event, sends the completed value sentiment as an `analysis` event, and ends
-with a compact `result` event containing only the analysis; it does not repeat
-the offers. The analysis uses the same label, score, summary, and aspect shape
-as the other source analyses. Requests from `http://localhost:3000` are allowed
-by the CORS configuration.
+Open an Amazon product page. P.R.V.S.A. reads the product details, opens its
+analysis panel, and requests price, written-review, and video-review research in
+parallel.
 
-## Chrome extension
+## How it works
 
-Load the `client` directory as an unpacked Manifest V3 extension. The extension
-service worker has host permission for the local API on port 8000 and performs
-the POST requests on behalf of the content script. Content-script code can wait
-for a response with, for example:
-
-```js
-const result = await globalThis.api.prices({ query: "headphones" });
+```text
+Amazon product page
+        │
+        ▼
+Chrome extension ── parses product, variant, image, and current price
+        │
+        ├── Google Shopping ── comparable offers and price-value analysis
+        ├── Google Products ── ratings, excerpts, and written-review sentiment
+        └── YouTube ── independent videos, transcripts, and sentiment
+        │
+        ▼
+Weighted result + optional on-device summary
 ```
 
-The extension only runs on Amazon pages. It parses the default product once
-when the page loads and opens an on-page analysis card. The card progressively
-shows the YouTube reviews being analyzed. It combines the existing source scores
-with fixed weights (YouTube 45%, Google Products reviews 35%, and price value
-20%), excluding neutral sources and re-normalizing the remaining weights. If all
-available sources are neutral, the final score is neutral. It then uses Chrome's
-on-device Gemini Nano Prompt API to write a cross-review summary of no more than
-75 words without creating or changing any score. The result card immediately
-shows the final weighted score on the `-1` to `+1` scale while retaining the
-separate source scores. The header provides independent minimize/restore and
-close controls. The card also shows the existing combined findings under
-**Video Analysis**. The extension
-checks whether Gemini Nano is already available. If it is, Nano automatically
-streams a cross-source **Full Summary** at the top of the card. It receives
-precomputed price-range, rating, review-count, and fixed aggregate-score
-metrics so it can cite useful numbers without recalculating them. The video
-analysis and score remain unchanged. If the model is not already available, only Video
-Analysis remains visible and the extension does not start a model download. No additional
-manifest permission or Gemini API key is needed for the on-device summary. The
-on-page card requests prices, shopping, and YouTube concurrently. Comparable
-offers appear as soon as the price stream starts, followed by a price-value
-score and summary when its Gemini analysis finishes. Shopping ratings
-and up to three review excerpts appear as soon as the first shopping stream
-event arrives, without waiting for Gemini's shopping analysis. When that
-analysis arrives, the card displays its sentiment in the same score-card format
-as video sentiment and places its summary plus review excerpts in one collapsed
-Reviews Summary. Gemini Nano receives the price analysis, shopping analysis,
-and video analyses when it writes the final Full Summary; it cannot replace
-their existing scores:
+The Manifest V3 service worker sends requests to the local FastAPI backend.
+All three research requests run concurrently, and NDJSON events progressively
+update the interface. API credentials remain in the backend environment and are
+never placed in the extension.
 
-```js
-console.log(globalThis.product);
-const priceResult = await globalThis.api.prices(globalThis.product, (event) => {
-  if (event.type === "price-information") console.log(event.data.offers);
-  if (event.type === "analysis") console.log(event.analysis);
-});
+## Configuration
+
+| Variable | Required | Purpose |
+| --- | :---: | --- |
+| `GEMINI_API_KEY` | Yes | Analyzes price, written-review, and video-review sentiment |
+| `YOUTUBE_API_KEY` | Yes | Searches YouTube and retrieves video metadata |
+| `SERPAPI_KEY` | Yes | Retrieves Google Shopping offers and Google Products reviews |
+| `GEMINI_MODEL` | No | Overrides the default `gemini-3.1-flash-lite` model |
+| `YOUTUBE_PROXY_USERNAME` | No | Webshare Residential username for transcript requests |
+| `YOUTUBE_PROXY_PASSWORD` | No | Webshare Residential password for transcript requests |
+
+If YouTube blocks transcript requests from the API host, set both proxy
+variables. The backend uses a direct connection when neither is set and reports
+a configuration error when only one is provided. Keep all credentials out of
+the repository and the Chrome extension.
+
+## API
+
+The backend exposes three streaming `POST` endpoints:
+
+| Endpoint | Returns |
+| --- | --- |
+| `/api/prices` | Comparable offers followed by price-value sentiment |
+| `/api/shopping` | Rating and review excerpts followed by written-review sentiment |
+| `/api/youtube` | Video previews and per-review analysis followed by the final video result |
+
+Each endpoint accepts the product object parsed by the extension:
+
+```json
+{
+  "asin": "B000000000",
+  "url": "https://www.amazon.com/dp/B000000000",
+  "title": "Example product",
+  "brand": "Example",
+  "model": "Model 1",
+  "variant": "Black",
+  "price": 99.99,
+  "currency": "USD",
+  "image": "https://example.com/product.jpg"
+}
 ```
 
-Call `globalThis.api.researchProduct(...)` when a consumer needs all sources.
-Each combined endpoint outcome has an `ok` flag and either `data` or `error`, so
-one failed source does not hide responses from the other sources.
+Responses use newline-delimited JSON so the UI can render source data and model
+output as they arrive. The API also allows requests from
+`http://localhost:3000` for a separate local web frontend.
 
-The parser returns a canonical ASIN URL, title, brand, model, selected variant,
-structured variant values, numeric price, ISO currency code, and HTTPS image
-URL. Fields Amazon does not publish are returned as `null` instead of guessed.
+## Project structure
 
-The `localhost:3000` CORS rule is for a separate local web frontend. Extension
-requests use the service worker and the API host permissions in
-`client/manifest.json` instead.
+```text
+.
+├── api/
+│   ├── main.py              # FastAPI application
+│   ├── sentiment.py         # Gemini analysis and evidence validation
+│   └── sources/             # Price, shopping, and YouTube routes
+└── client/
+    ├── manifest.json        # Chrome Manifest V3 configuration
+    ├── assets/              # P.R.V.S.A. artwork and extension icons
+    └── src/
+        ├── background.js    # API proxy and streaming transport
+        ├── parser.js        # Amazon product parser
+        ├── nano.js          # Optional on-device final summary
+        ├── ui.js            # On-page analysis panel
+        └── content.js       # Research orchestration
+```
+
+## Current scope
+
+- The extension runs on Amazon.com product pages.
+- The local API must be running on port `8000`.
+- YouTube analysis requires an English transcript to be available.
+- A failure from one source does not discard successful results from the others.
