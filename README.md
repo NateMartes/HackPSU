@@ -70,6 +70,18 @@ Neutral or unavailable sources are excluded and the remaining weights are
 rebalanced. If every available source is neutral, the final result remains
 neutral—the extension does not invent a stronger opinion.
 
+### Interactive evidence graph
+
+The research icon in the analysis header opens a centered D3 evidence graph.
+The Consensus sits between the Amazon listing and the research branches, tracing
+the result back to transcript-backed YouTube
+reviews, Google Products feedback, and individual Google Shopping offers.
+Every source leaf links to the original record when available, or to a focused
+research query as a fallback. The grid canvas
+supports node dragging and zooming as the evidence set grows. Each research
+branch displays its aggregate sentiment and score; hovering over the Consensus
+node animates an RGB flow around that box using the logo's colors.
+
 ### Optional on-device summary
 
 When Chrome's built-in Gemini Nano Prompt API is already available, P.R.V.S.A.
@@ -205,6 +217,7 @@ statistics, and sentiment analysis. The API also allows requests from
 └── client/
     ├── manifest.json        # Chrome Manifest V3 configuration
     ├── assets/              # P.R.V.S.A. artwork and extension icons
+    ├── vendor/              # Locally bundled browser dependencies (D3)
     └── src/
         ├── background.js    # API proxy and streaming transport
         ├── parser.js        # Amazon product parser

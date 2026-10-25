@@ -38,7 +38,10 @@
       .window-controls { display: flex; align-items: center; gap: 2px; }
       .window-control { display: grid; width: 30px; height: 30px; cursor: pointer; place-items: center; border-radius: 50%; color: #596773; font-size: 22px; line-height: 1; }
       .window-control:hover { background: #edf0f2; color: #17212b; }
-      .window-control:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid rgba(255,153,0,.42); outline-offset: 2px; }
+      .window-control:focus-visible, .evidence-close:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid rgba(255,153,0,.42); outline-offset: 2px; }
+      .evidence-button { position: relative; }
+      .evidence-button svg { width: 18px; height: 18px; }
+      .evidence-button:hover { background: linear-gradient(135deg, rgba(255,42,32,.11), rgba(40,86,255,.11)); }
       .minimize { font-size: 20px; padding-bottom: 7px; }
       .panel.minimized { width: min(500px, calc(100vw - 28px)); height: auto; }
       .panel.minimized .body { display: none; }
@@ -121,15 +124,91 @@
       details[open] summary::after { content: "−"; }
       .summary-copy { margin: 0; padding: 0 12px 13px; color: #4b5964; font-size: 13px; line-height: 1.55; }
       .error { margin-top: 12px; padding: 11px 12px; border: 1px solid #f0c8c5; border-radius: 9px; background: #fff4f3; color: #8d2119; font-size: 13px; }
+      .evidence-layer {
+        position: fixed; z-index: 2147483647; inset: 0; display: grid; padding: 24px;
+        place-items: center; background: rgba(10, 16, 25, .62); backdrop-filter: blur(4px);
+        font-family: Arial, Helvetica, sans-serif; animation: evidence-fade 180ms ease-out both;
+      }
+      .evidence-dialog {
+        display: flex; width: min(1060px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px));
+        flex-direction: column; overflow: hidden; border: 1px solid rgba(111, 122, 135, .36);
+        border-radius: 20px; background: #fff; box-shadow: 0 28px 90px rgba(4, 12, 22, .34);
+        color: #17212b; animation: evidence-arrive 220ms cubic-bezier(.2,.8,.2,1) both;
+      }
+      .evidence-header {
+        display: flex; align-items: center; gap: 18px; padding: 14px 18px 14px 22px;
+        border-bottom: 1px solid #dfe4e8; background: linear-gradient(110deg, #fff 52%, #f5f8ff);
+      }
+      .evidence-heading { min-width: 0; flex: 1; }
+      .evidence-title { margin: 0; color: #17212b; font: 800 20px/1.2 Arial, Helvetica, sans-serif; }
+      .evidence-close {
+        display: grid; width: 34px; height: 34px; flex: 0 0 34px; cursor: pointer; place-items: center;
+        border: 1px solid #d8dee3; border-radius: 50%; background: #fff; color: #53616d; font-size: 22px; line-height: 1;
+      }
+      .evidence-close:hover { border-color: #bcc6ce; background: #f3f5f6; color: #17212b; }
+      .evidence-viewport {
+        overflow: auto; background-color: #fbfaf7;
+        background-image: linear-gradient(#dfe4e8 1px, transparent 1px), linear-gradient(90deg, #dfe4e8 1px, transparent 1px);
+        background-size: 24px 24px; scrollbar-color: #aeb9c2 transparent;
+      }
+      .evidence-canvas { position: relative; width: 100%; min-width: 760px; height: 570px; }
+      .evidence-canvas svg { display: block; width: 100%; height: 100%; cursor: grab; }
+      .evidence-canvas svg:active { cursor: grabbing; }
+      .graph-link { fill: none; stroke-linecap: round; opacity: .62; }
+      .graph-node { color: #17212b; text-decoration: none; cursor: grab; }
+      .graph-node[href] { cursor: pointer; }
+      .graph-node:active { cursor: grabbing; }
+      .graph-node rect { fill: rgba(255,255,255,.97); stroke: #d5dde3; stroke-width: 1.2; filter: url(#node-shadow); }
+      .graph-node:hover rect, .graph-node:focus-visible rect { stroke: var(--node-color, #637381); stroke-width: 2; }
+      .graph-node:focus-visible { outline: none; }
+      .graph-node .node-accent { fill: var(--node-color, #637381); stroke: none; filter: none; }
+      .graph-node .node-rgb-halo { fill: none; stroke: url(#prvsa-node-gradient); stroke-width: 8; stroke-linecap: round; stroke-dasharray: 16 8; opacity: 0; filter: none; pointer-events: none; transition: opacity 160ms ease; }
+      .graph-node .node-dot { fill: var(--node-color, #637381); }
+      .graph-node text { pointer-events: none; font-family: Arial, Helvetica, sans-serif; }
+      .graph-node .node-kicker { fill: #7b8791; font-size: 8px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+      .graph-node .node-label { fill: #1b2731; font-size: 11px; font-weight: 800; }
+      .graph-node .node-detail { fill: #697680; font-size: 9px; }
+      .graph-node .node-meta { fill: #89939b; font-size: 8px; }
+      .graph-node .sentiment-positive { fill: #07824f; font-weight: 800; }
+      .graph-node .sentiment-negative { fill: #c0352b; font-weight: 800; }
+      .graph-node .sentiment-neutral { fill: #7a6824; font-weight: 800; }
+      .graph-node--leaf .node-label { font-size: 9px; font-weight: 700; }
+      .graph-node--leaf .node-external { fill: #78858f; font-size: 9px; }
+      .graph-empty { fill: #74818b; font-size: 12px; font-style: italic; text-anchor: middle; }
+      .graph-node--hub:hover .node-card, .graph-node--hub:focus-visible .node-card {
+        stroke: url(#prvsa-node-gradient); stroke-width: 3;
+      }
+      .graph-node--hub:hover .node-rgb-halo, .graph-node--hub:focus-visible .node-rgb-halo {
+        opacity: .9; filter: drop-shadow(0 0 5px rgba(255,42,32,.52)) drop-shadow(0 0 8px rgba(40,86,255,.46));
+        animation: consensus-halo-flow 720ms linear infinite;
+      }
+      .evidence-footer {
+        display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 10px 22px;
+        border-top: 1px solid #dfe4e8; background: #fff; color: #6e7a84; font-size: 10px;
+      }
+      .evidence-key { display: flex; flex-wrap: wrap; gap: 11px; }
+      .evidence-key span::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: var(--key-color); }
+      @keyframes evidence-fade { from { opacity: 0; } }
+      @keyframes evidence-arrive { from { opacity: 0; transform: translateY(12px) scale(.98); } }
+      @keyframes consensus-halo-flow { to { stroke-dashoffset: -48; } }
       [hidden] { display: none !important; }
       @media (max-width: 520px) { .panel { top: 14px; left: 14px; } }
-      @media (prefers-reduced-motion: reduce) { .panel { animation: none; } .spinner { animation-duration: 1.5s; } .progress::after { animation-duration: 2.5s; } }
+      @media (max-width: 720px) { .evidence-layer { padding: 10px; } .evidence-dialog { width: calc(100vw - 20px); max-height: calc(100vh - 20px); } .evidence-header { padding: 13px 14px 13px 16px; } .evidence-title { font-size: 18px; } .evidence-footer { align-items: flex-start; flex-direction: column; padding: 10px 16px; } }
+      @media (prefers-reduced-motion: reduce) { .panel, .evidence-layer, .evidence-dialog { animation: none; } .spinner { animation-duration: 1.5s; } .progress::after { animation-duration: 2.5s; } .graph-node--hub:hover .node-rgb-halo, .graph-node--hub:focus-visible .node-rgb-halo { animation: none; } }
     </style>
     <aside class="panel" role="dialog" aria-labelledby="analysis-title" aria-live="polite">
       <header class="header">
         <div class="mark" aria-hidden="true"><img src="${ICON_URL}" alt=""></div>
         <div class="heading"><div class="app-title">P.R.V.S.A.</div><h2 id="analysis-title"></h2></div>
         <div class="window-controls">
+          <button class="evidence-button window-control" type="button" aria-label="Open evidence graph" aria-haspopup="dialog" title="View evidence graph">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <defs><linearGradient id="evidence-gradient" x1="2" y1="3" x2="22" y2="21" gradientUnits="userSpaceOnUse"><stop stop-color="#ff2a20"/><stop offset=".26" stop-color="#ffb800"/><stop offset=".52" stop-color="#20c763"/><stop offset=".76" stop-color="#2856ff"/><stop offset="1" stop-color="#8d2cff"/></linearGradient></defs>
+              <path d="M10.5 17a6.5 6.5 0 1 1 4.6-1.9L21 21" fill="none" stroke="url(#evidence-gradient)" stroke-width="2" stroke-linecap="round"/>
+              <path d="M7.5 12.5 10 10l2 2 2.5-3" fill="none" stroke="url(#evidence-gradient)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="7.5" cy="12.5" r="1" fill="#ff4b22"/><circle cx="10" cy="10" r="1" fill="#20c763"/><circle cx="12" cy="12" r="1" fill="#2856ff"/><circle cx="14.5" cy="9" r="1" fill="#8d2cff"/>
+            </svg>
+          </button>
           <button class="minimize window-control" type="button" aria-label="Minimize analysis" aria-expanded="true" title="Minimize">−</button>
           <button class="close window-control" type="button" aria-label="Close analysis" title="Close">×</button>
         </div>
@@ -193,7 +272,24 @@
         </section>
         <div class="error" role="alert" hidden></div>
       </div>
-    </aside>`;
+    </aside>
+    <div class="evidence-layer" hidden>
+      <section class="evidence-dialog" role="dialog" aria-modal="true" aria-labelledby="evidence-title">
+        <header class="evidence-header">
+          <div class="evidence-heading">
+            <h3 class="evidence-title" id="evidence-title">Evidence graph</h3>
+          </div>
+          <button class="evidence-close" type="button" aria-label="Close evidence graph" title="Close">×</button>
+        </header>
+        <div class="evidence-viewport">
+          <div class="evidence-canvas" role="region" aria-label="Interactive evidence graph showing the product, PRVSA analysis, and research sources"></div>
+        </div>
+        <footer class="evidence-footer">
+          <div class="evidence-key"><span style="--key-color:#ff4a22">Video</span><span style="--key-color:#20c763">Reviews</span><span style="--key-color:#315cf0">Prices</span><span>Hover Consensus for its RGB halo · drag nodes · scroll to zoom</span></div>
+          <div class="evidence-status" aria-live="polite">Research sources are loading.</div>
+        </footer>
+      </section>
+    </div>`;
 
   function safeVideoUrl(value) {
     try {
@@ -207,6 +303,25 @@
       const url = new URL(value);
       return url.protocol === "https:" && (url.hostname === "ytimg.com" || url.hostname.endsWith(".ytimg.com")) ? url.href : null;
     } catch (_error) { return null; }
+  }
+
+  function safeHttpUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" ? url.href : null;
+    } catch (_error) { return null; }
+  }
+
+  function firstEvidenceUrl(value) {
+    if (!value || typeof value !== "object") return null;
+    for (const key of ["link", "product_link", "url"]) {
+      const url = safeHttpUrl(value[key]);
+      if (!url) continue;
+      const hostname = new URL(url).hostname;
+      if (hostname === "serpapi.com" || hostname.endsWith(".serpapi.com")) continue;
+      return url;
+    }
+    return null;
   }
 
   function scoreText(score) {
@@ -280,10 +395,376 @@
     const finalVerdict = shadow.querySelector(".final-verdict");
     const finalScore = shadow.querySelector(".final-score");
     const errorBox = shadow.querySelector(".error");
+    const evidenceButton = shadow.querySelector(".evidence-button");
+    const evidenceLayer = shadow.querySelector(".evidence-layer");
+    const evidenceClose = shadow.querySelector(".evidence-close");
+    const evidenceCanvas = shadow.querySelector(".evidence-canvas");
+    const evidenceStatus = shadow.querySelector(".evidence-status");
     const streamedAnalyses = new Map();
+    const evidence = {
+      videos: [],
+      shopping: null,
+      prices: null,
+      result: null,
+      sentiments: { video: null, reviews: null, prices: null },
+    };
+    let evidenceReturnFocus = null;
 
     title.textContent = product?.title || "Product analysis";
     panel.setAttribute("aria-label", `Review analysis for ${product?.title || "this product"}`);
+
+    function countLabel(count, singular, plural = `${singular}s`) {
+      return `${count} ${count === 1 ? singular : plural}`;
+    }
+
+    function shortened(value, maximum = 28) {
+      const text = String(value || "").trim();
+      return text.length > maximum ? `${text.slice(0, maximum - 1)}…` : text;
+    }
+
+    function sentimentText(sentiment, fallback = "Analysis in progress") {
+      if (!sentiment || typeof sentiment !== "object") return fallback;
+      const label = ["positive", "neutral", "negative"].includes(sentiment.label)
+        ? sentiment.label
+        : "neutral";
+      return `${label[0].toUpperCase() + label.slice(1)} ${scoreText(sentiment.score)}`;
+    }
+
+    function renderEvidenceGraph() {
+      if (!root.d3) {
+        evidenceCanvas.textContent = "The evidence graph could not load.";
+        return;
+      }
+
+      const amazonUrl = safeHttpUrl(product?.url) || safeHttpUrl(globalThis.location?.href);
+      const videoItems = evidence.videos.flatMap((video) => {
+        const url = safeVideoUrl(video?.url);
+        if (!url) return [];
+        return [{
+          label: [video?.title || "YouTube review", video?.channelTitle].filter(Boolean).join(" — "),
+          url,
+          group: "video",
+        }];
+      });
+
+      const shoppingData = evidence.shopping;
+      const selectedShoppingResult = shoppingData?.sourceData?.selectedShoppingResult;
+      const shoppingUrl = firstEvidenceUrl(selectedShoppingResult)
+        || `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(product?.title || "")}`;
+      const reviewItems = shoppingData ? [{
+        label: Number.isFinite(Number(shoppingData.rating))
+          ? `Google Products · ${Number(shoppingData.rating).toFixed(1)} stars · ${shoppingData.reviews ?? "review data"}`
+          : "Google Products review record",
+        url: shoppingUrl,
+        group: "reviews",
+      }] : [];
+      const reviewSources = new Map();
+      for (const review of Array.isArray(shoppingData?.review_details) ? shoppingData.review_details : []) {
+        const sourceName = typeof review?.source === "string" && review.source.trim()
+          ? review.source.trim()
+          : "Shopper review";
+        const sourceUrl = firstEvidenceUrl(review);
+        if (!reviewSources.has(sourceName) || (!reviewSources.get(sourceName) && sourceUrl)) {
+          reviewSources.set(sourceName, sourceUrl);
+        }
+      }
+      for (const [sourceName, sourceUrl] of reviewSources) {
+        reviewItems.push({
+          label: sourceName,
+          url: sourceUrl
+            || `https://www.google.com/search?q=${encodeURIComponent(`${product?.title || "product"} ${sourceName} reviews`)}`,
+          group: "reviews",
+        });
+      }
+
+      const offers = Array.isArray(evidence.prices?.offers) ? evidence.prices.offers : [];
+      const rawOffers = Array.isArray(evidence.prices?.sourceData?.shoppingResults)
+        ? evidence.prices.sourceData.shoppingResults
+        : [];
+      const priceItems = offers.map((offer, index) => {
+        const matchingRawOffer = rawOffers.find((candidate) => (
+          candidate?.title === offer?.title
+          && candidate?.source === offer?.source
+          && candidate?.price === offer?.price
+        )) || rawOffers[index];
+        return {
+          label: [offer?.source || offer?.title || "Market offer", offer?.price].filter(Boolean).join(" · "),
+          url: firstEvidenceUrl(offer)
+            || firstEvidenceUrl(matchingRawOffer)
+            || `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(`${product?.title || "product"} ${offer?.source || offer?.title || "offer"}`)}`,
+          group: "prices",
+        };
+      });
+
+      const productDetail = [product?.brand, product?.model, product?.variant]
+        .filter(Boolean)
+        .join(" · ") || "Current Amazon product page";
+      const resultDetail = sentimentText(evidence.result, "Consensus is being calculated");
+      const treeData = {
+        id: "prvsa",
+        label: "Consensus",
+        kicker: "P.R.V.S.A. aggregate",
+        detail: resultDetail,
+        meta: evidence.result?.complete ? "Final weighted sentiment" : "Live weighted sentiment",
+        tone: evidence.result?.label,
+        kind: "hub",
+        group: "hub",
+        children: [
+          {
+            id: "product",
+            label: product?.title || "Amazon product",
+            kicker: "Starting point",
+            detail: productDetail,
+            meta: product?.price != null ? `Amazon price · ${moneyText(product.price, product.currency)}` : "Amazon listing",
+            kind: "main",
+            group: "product",
+            url: amazonUrl,
+          },
+          {
+            id: "video",
+            label: "YouTube transcripts",
+            kicker: "Independent reviews",
+            detail: sentimentText(evidence.sentiments.video),
+            meta: `${countLabel(videoItems.length, "source")} · 45% weight`,
+            tone: evidence.sentiments.video?.label,
+            kind: "main",
+            group: "video",
+            children: videoItems.map((item, index) => ({ ...item, id: `video-${index}`, kind: "leaf" })),
+          },
+          {
+            id: "reviews",
+            label: "Google Products",
+            kicker: "Shopper feedback",
+            detail: sentimentText(evidence.sentiments.reviews),
+            meta: `${countLabel(reviewItems.length, "source")} · 35% weight`,
+            tone: evidence.sentiments.reviews?.label,
+            kind: "main",
+            group: "reviews",
+            children: reviewItems.map((item, index) => ({ ...item, id: `review-${index}`, kind: "leaf" })),
+          },
+          {
+            id: "prices",
+            label: "Google Shopping",
+            kicker: "Market context",
+            detail: sentimentText(evidence.sentiments.prices),
+            meta: `${countLabel(priceItems.length, "offer")} · 20% weight`,
+            tone: evidence.sentiments.prices?.label,
+            kind: "main",
+            group: "prices",
+            children: priceItems.map((item, index) => ({ ...item, id: `price-${index}`, kind: "leaf" })),
+          },
+        ],
+      };
+
+      const d3 = root.d3;
+      const hierarchy = d3.hierarchy(treeData);
+      hierarchy.each((node) => {
+        if (node.data.kind === "leaf" && !safeHttpUrl(node.data.url)) {
+          node.data.url = `https://www.google.com/search?q=${encodeURIComponent(`${product?.title || "product"} ${node.data.label}`)}`;
+        }
+      });
+      const leafCount = hierarchy.leaves().length;
+      const graphWidth = 1200;
+      const graphHeight = Math.max(570, (leafCount * 60) + 190);
+      d3.tree().size([graphHeight - 110, 1]).separation((left, right) => (
+        left.parent === right.parent ? 1 : 1.25
+      ))(hierarchy);
+      hierarchy.each((node) => {
+        node.x += 55;
+        if (node.data.id === "prvsa") {
+          node.x = graphHeight / 2;
+          node.y = 500;
+        } else if (node.data.id === "product") {
+          node.x = graphHeight / 2;
+          node.y = 160;
+        } else {
+          node.y = node.depth === 1 ? 780 : 1050;
+        }
+      });
+
+      evidenceCanvas.replaceChildren();
+      evidenceCanvas.style.height = `${graphHeight}px`;
+      const svg = d3.select(evidenceCanvas)
+        .append("svg")
+        .attr("viewBox", `0 0 ${graphWidth} ${graphHeight}`)
+        .attr("role", "group")
+        .attr("aria-label", "D3 evidence network");
+      const defs = svg.append("defs");
+      const gradient = defs.append("linearGradient")
+        .attr("id", "prvsa-node-gradient")
+        .attr("gradientUnits", "userSpaceOnUse")
+        .attr("x1", -100)
+        .attr("x2", 100);
+      gradient.append("stop").attr("offset", "0%").attr("stop-color", "#ff2a20");
+      gradient.append("stop").attr("offset", "28%").attr("stop-color", "#ffe600");
+      gradient.append("stop").attr("offset", "52%").attr("stop-color", "#20c763");
+      gradient.append("stop").attr("offset", "76%").attr("stop-color", "#2856ff");
+      gradient.append("stop").attr("offset", "100%").attr("stop-color", "#8d2cff");
+      const filter = defs.append("filter").attr("id", "node-shadow").attr("x", "-30%").attr("y", "-40%").attr("width", "160%").attr("height", "180%");
+      filter.append("feDropShadow").attr("dx", 0).attr("dy", 4).attr("stdDeviation", 5).attr("flood-color", "#17212b").attr("flood-opacity", .12);
+
+      const scene = svg.append("g");
+      const groupColor = {
+        hub: "url(#prvsa-node-gradient)",
+        product: "#ff8a00",
+        video: "#ff4a22",
+        reviews: "#20b887",
+        prices: "#4263eb",
+      };
+      const linkShape = d3.linkHorizontal().x((point) => point.y).y((point) => point.x);
+      const links = scene.append("g")
+        .selectAll("path")
+        .data(hierarchy.links())
+        .join("path")
+        .attr("class", "graph-link")
+        .attr("stroke", (link) => groupColor[link.target.data.group] || "#9aa5ae")
+        .attr("stroke-width", (link) => link.target.depth === 1 ? 3 : 1.6)
+        .attr("stroke-dasharray", (link) => link.target.depth === 1 ? "7 7" : "4 5")
+        .attr("d", linkShape);
+      const nodes = scene.append("g")
+        .selectAll("a")
+        .data(hierarchy.descendants())
+        .join("a")
+        .attr("class", (node) => `graph-node graph-node--${node.data.kind}`)
+        .attr("href", (node) => safeHttpUrl(node.data.url) || null)
+        .attr("xlink:href", (node) => safeHttpUrl(node.data.url) || null)
+        .attr("target", (node) => node.data.url ? "_blank" : null)
+        .attr("rel", (node) => node.data.url ? "noopener noreferrer" : null)
+        .attr("aria-label", (node) => {
+          const description = [node.data.label, node.data.detail, node.data.meta].filter(Boolean).join(". ");
+          return node.data.url ? `Open source: ${description}` : description;
+        })
+        .attr("tabindex", (node) => node.data.url || node.data.kind === "hub" ? 0 : -1)
+        .style("--node-color", (node) => groupColor[node.data.group] || "#7b8791")
+        .attr("transform", (node) => `translate(${node.y},${node.x})`);
+
+      nodes.append("title").text((node) => (
+        node.data.kind === "hub"
+          ? "Consensus — hover for the RGB border flow"
+          : `${node.data.label}${node.data.url ? " — open source" : ""}`
+      ));
+      nodes.filter((node) => node.data.kind === "hub")
+        .append("rect")
+        .attr("class", "node-rgb-halo")
+        .attr("x", -99)
+        .attr("y", -48)
+        .attr("width", 198)
+        .attr("height", 96)
+        .attr("rx", 19);
+      nodes.append("rect")
+        .attr("class", "node-card")
+        .attr("x", (node) => node.data.kind === "leaf" ? -86 : -94)
+        .attr("y", (node) => node.data.kind === "leaf" ? -17 : -43)
+        .attr("width", (node) => node.data.kind === "leaf" ? 172 : 188)
+        .attr("height", (node) => node.data.kind === "leaf" ? 34 : 86)
+        .attr("rx", (node) => node.data.kind === "leaf" ? 9 : 14);
+      nodes.filter((node) => node.data.kind !== "leaf")
+        .append("rect")
+        .attr("class", "node-accent")
+        .attr("x", -94)
+        .attr("y", -43)
+        .attr("width", 188)
+        .attr("height", 4)
+        .attr("rx", 2);
+      nodes.filter((node) => node.data.kind === "leaf")
+        .append("circle")
+        .attr("class", "node-dot")
+        .attr("cx", -72)
+        .attr("cy", 0)
+        .attr("r", 4);
+      nodes.filter((node) => node.data.kind !== "leaf")
+        .append("text")
+        .attr("class", "node-kicker")
+        .attr("x", -80)
+        .attr("y", -18)
+        .text((node) => node.data.kicker);
+      nodes.append("text")
+        .attr("class", "node-label")
+        .attr("x", (node) => node.data.kind === "leaf" ? -61 : -80)
+        .attr("y", (node) => node.data.kind === "leaf" ? 3 : 0)
+        .text((node) => shortened(node.data.label, node.data.kind === "leaf" ? 25 : 26));
+      nodes.filter((node) => node.data.kind !== "leaf")
+        .append("text")
+        .attr("class", (node) => `node-detail${node.data.tone ? ` sentiment-${node.data.tone}` : ""}`)
+        .attr("x", -80)
+        .attr("y", 18)
+        .text((node) => shortened(node.data.detail, 31));
+      nodes.filter((node) => node.data.kind !== "leaf" && node.data.meta)
+        .append("text")
+        .attr("class", "node-meta")
+        .attr("x", -80)
+        .attr("y", 33)
+        .text((node) => shortened(node.data.meta, 35));
+      nodes.filter((node) => node.data.kind === "leaf" && node.data.url)
+        .append("text")
+        .attr("class", "node-external")
+        .attr("x", 72)
+        .attr("y", 3)
+        .text("↗");
+
+      const updatePositions = () => {
+        nodes.attr("transform", (node) => `translate(${node.y},${node.x})`);
+        links.attr("d", linkShape);
+      };
+      nodes.filter((node) => !node.data.url).call(d3.drag()
+        .on("start", (event) => event.sourceEvent?.stopPropagation())
+        .on("drag", (event, node) => {
+          node.y += event.dx;
+          node.x += event.dy;
+          updatePositions();
+        }));
+      svg.call(d3.zoom()
+        .scaleExtent([.55, 2.2])
+        .on("zoom", (event) => scene.attr("transform", event.transform)));
+
+      const totalPoints = 1 + videoItems.length + reviewItems.length + priceItems.length;
+      evidenceStatus.textContent = `${countLabel(totalPoints, "evidence point")} mapped with D3. Every source leaf opens its source or a focused research search.`;
+    }
+
+    function closeEvidenceGraph() {
+      if (evidenceLayer.hidden) return;
+      evidenceLayer.hidden = true;
+      panel.removeAttribute("aria-hidden");
+      evidenceButton.setAttribute("aria-expanded", "false");
+      evidenceReturnFocus?.focus();
+      evidenceReturnFocus = null;
+    }
+
+    function openEvidenceGraph() {
+      evidenceReturnFocus = shadow.activeElement || evidenceButton;
+      renderEvidenceGraph();
+      evidenceLayer.hidden = false;
+      panel.setAttribute("aria-hidden", "true");
+      evidenceButton.setAttribute("aria-expanded", "true");
+      evidenceClose.focus();
+    }
+
+    evidenceButton.setAttribute("aria-expanded", "false");
+    evidenceButton.addEventListener("click", openEvidenceGraph);
+    evidenceClose.addEventListener("click", closeEvidenceGraph);
+    evidenceLayer.addEventListener("click", (event) => {
+      if (event.target === evidenceLayer) closeEvidenceGraph();
+    });
+    evidenceLayer.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeEvidenceGraph();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = [...evidenceLayer.querySelectorAll("button, a[href]")]
+        .filter((element) => !element.hidden);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (event.shiftKey && shadow.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && shadow.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
     shadow.querySelector(".close").addEventListener("click", () => host.remove());
     const minimizeButton = shadow.querySelector(".minimize");
     minimizeButton.addEventListener("click", () => {
@@ -293,6 +774,7 @@
       minimizeButton.setAttribute("aria-expanded", String(!minimized));
       minimizeButton.title = minimized ? "Restore" : "Minimize";
     });
+    renderEvidenceGraph();
 
     function showPriceInformation(data) {
       const offers = Array.isArray(data?.offers)
@@ -302,6 +784,8 @@
         && data.current_price !== ""
         && Number.isFinite(Number(data.current_price));
       if (!hasCurrentPrice && !offers.length) return;
+      evidence.prices = data;
+      renderEvidenceGraph();
 
       currentPrice.textContent = hasCurrentPrice
         ? `Amazon ${moneyText(data.current_price, data.currency)}`
@@ -347,6 +831,8 @@
         ? analysis.label
         : "neutral";
       const formattedScore = scoreText(analysis.score);
+      evidence.sentiments.prices = { label, score: analysis.score };
+      renderEvidenceGraph();
       priceVerdict.textContent = label[0].toUpperCase() + label.slice(1);
       priceVerdict.className = `price-verdict verdict ${label}`;
       priceVerdict.removeAttribute("aria-hidden");
@@ -374,6 +860,8 @@
         : [];
 
       if (!hasRating && reviewCount == null && !reviews.length) return;
+      evidence.shopping = data;
+      renderEvidenceGraph();
 
       const boundedRating = hasRating ? Math.max(0, Math.min(5, numericRating)) : 0;
       shoppingStars.hidden = !hasRating;
@@ -430,6 +918,8 @@
         ? analysis.label
         : "neutral";
       const formattedScore = scoreText(analysis.score);
+      evidence.sentiments.reviews = { label, score: analysis.score };
+      renderEvidenceGraph();
       const displayLabel = label[0].toUpperCase() + label.slice(1);
       shoppingVerdict.textContent = displayLabel;
       shoppingVerdict.className = `shopping-verdict verdict ${label}`;
@@ -450,6 +940,8 @@
     }
 
     function showVideos(videos) {
+      evidence.videos = Array.isArray(videos) ? videos : [];
+      renderEvidenceGraph();
       videosContainer.replaceChildren();
       for (const video of Array.isArray(videos) ? videos.slice(0, 3) : []) {
         const href = safeVideoUrl(video?.url);
@@ -506,6 +998,9 @@
       const videoLabel = ["positive", "neutral", "negative"].includes(videoSummary.label)
         ? videoSummary.label
         : "neutral";
+      evidence.result = { label, score: summary.score, complete };
+      evidence.sentiments.video = { label: videoLabel, score: videoSummary.score };
+      renderEvidenceGraph();
       verdict.textContent = videoLabel;
       verdict.className = `video-verdict verdict ${videoLabel}`;
       verdict.removeAttribute("aria-hidden");
@@ -596,6 +1091,7 @@
     }
 
     return {
+      openEvidenceGraph,
       handleEvent(event) {
         if (event?.type === "videos") showVideos(event.videos);
         else handleAnalysisEvent(event);

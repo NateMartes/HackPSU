@@ -125,6 +125,7 @@ def _fetch_shopping_information(product: Product) -> tuple[dict, dict]:
     review_details = [
         {
             "source": review.get("source"),
+            "link": review.get("link"),
             "rating": review.get("rating"),
             "text": review.get("text"),
         }
