@@ -4,3 +4,4 @@ httpx>=0.28,<1.0
 uvicorn[standard]>=0.38,<1.0
 youtube-transcript-api>=1.2,<2.0
 serpapi
+google_search_results>=2.4.2
