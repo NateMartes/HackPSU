@@ -1,6 +1,6 @@
 const API_ENDPOINTS = new Set(["prices", "shopping", "youtube"]);
 // Endpoints that respond with NDJSON progress events before their final result.
-const STREAMING_ENDPOINTS = new Set(["shopping", "youtube"]);
+const STREAMING_ENDPOINTS = new Set(["prices", "shopping", "youtube"]);
 
 /**
  * POST a request through the extension service worker and wait for the API.
@@ -107,7 +107,7 @@ async function requestProductResearch(product, onResult = () => {}, onProgress =
 }
 
 globalThis.api = Object.freeze({
-  prices: (payload) => requestApi("prices", payload),
+  prices: (payload, onEvent) => requestApiStream("prices", payload, onEvent),
   shopping: (payload, onEvent) => requestApiStream("shopping", payload, onEvent),
   youtube: (payload, onEvent) => requestApiStream("youtube", payload, onEvent),
   researchProduct: requestProductResearch,
@@ -175,10 +175,31 @@ setTimeout(async () => {
   }
 
   const analysisUI = globalThis.productAnalysisUI?.mount(product);
+  let priceInformation = null;
+  let shoppingInformation = null;
+
+  const priceRequest = globalThis.api.prices(product, (event) => {
+    if (event?.type === "price-information") {
+      console.log("price API update:", event);
+      priceInformation = event.data;
+      analysisUI?.showPriceInformation(event.data);
+    } else if (event?.type === "analysis") {
+      console.log("price analysis update:", event);
+      analysisUI?.showPriceAnalysis(event.analysis);
+    }
+  }).then((result) => {
+    console.log("price API result:", result);
+    analysisUI?.showPriceAnalysis(result?.analysis);
+    return result;
+  }).catch((error) => {
+    console.error("price API failed:", error);
+    return null;
+  });
 
   const shoppingRequest = globalThis.api.shopping(product, (event) => {
     if (event?.type === "shopping-information") {
       console.log("shopping API update:", event);
+      shoppingInformation = event.data;
       analysisUI?.showShoppingInformation(event.data);
     } else if (event?.type === "analysis") {
       console.log("shopping analysis update:", event);
@@ -203,10 +224,19 @@ setTimeout(async () => {
     });
 
     console.log("youtube API result:", result);
-    const shoppingResult = await shoppingRequest;
+    const [shoppingResult, priceResult] = await Promise.all([
+      shoppingRequest,
+      priceRequest,
+    ]);
     await summarizeExistingReviews(
       product,
-      { ...result, shoppingAnalysis: shoppingResult?.analysis ?? null },
+      {
+        ...result,
+        shoppingAnalysis: shoppingResult?.analysis ?? null,
+        shoppingInformation: shoppingInformation ?? shoppingResult,
+        priceAnalysis: priceResult?.analysis ?? null,
+        priceInformation,
+      },
       analysisUI,
     );
   } catch (error) {
