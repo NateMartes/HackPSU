@@ -13,7 +13,7 @@ router = APIRouter(tags=["prices"])
 
 @router.post("/prices")
 async def prices(product: Product) -> dict[str, Any]:
-  client = serpapi.Client(api_key=os.getenv("serp_api_key"))
+  client = serpapi.Client(api_key=os.getenv("SERP_API_KEY"))
   query_string = product.title + " "
   if product.model != None:
     query_string = query_string + product.model
@@ -30,15 +30,5 @@ async def prices(product: Product) -> dict[str, Any]:
     price_and_seller["price"] = i['price']
     price_and_seller["seller"] = i['source']
     prices_to_consider.append(price_and_seller)
-    #prices_to_consider
-    #prices_to_consider.append(price_and_seller)
-    #print(i["source"])
-    #for j in i:
-      #print(j)
-    #print()
-    #prices_to_consider.append(i['price'])
-    #print(i)
-    #print()
-    
 
   return {"prices_to_consider": prices_to_consider}
