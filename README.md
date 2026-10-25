@@ -147,11 +147,18 @@ never placed in the extension.
 | `GEMINI_MODEL` | No | Overrides the default `gemini-3.1-flash-lite` model |
 | `YOUTUBE_PROXY_USERNAME` | No | Webshare Residential username for transcript requests |
 | `YOUTUBE_PROXY_PASSWORD` | No | Webshare Residential password for transcript requests |
+| `YOUTUBE_TEST_DATA` | No | Uses local fixture data and makes no YouTube, transcript, or video-analysis requests |
 
 If YouTube blocks transcript requests from the API host, set both proxy
 variables. The backend uses a direct connection when neither is set and reports
 a configuration error when only one is provided. Keep all credentials out of
 the repository and the Chrome extension.
+
+When the YouTube Data API reports an exhausted search quota, the YouTube route
+returns clearly labeled local fixture data rather than consuming another search
+API. Set `YOUTUBE_TEST_DATA=true` to force this mode without making an initial
+YouTube request. Test responses include `testData: true` and identify their
+provider as `local-test-fixture`; they must not be treated as research evidence.
 
 ## API
 

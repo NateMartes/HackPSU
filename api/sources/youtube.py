@@ -6,6 +6,7 @@ import re
 import traceback
 from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import quote_plus
 
 import httpx
 from fastapi import APIRouter, HTTPException, status
@@ -25,9 +26,11 @@ YOUTUBE_WATCH_URL = "https://www.youtube.com/watch?v="
 YOUTUBE_API_KEY_ENV = "YOUTUBE_API_KEY"
 YOUTUBE_PROXY_USERNAME_ENV = "YOUTUBE_PROXY_USERNAME"
 YOUTUBE_PROXY_PASSWORD_ENV = "YOUTUBE_PROXY_PASSWORD"
+YOUTUBE_TEST_DATA_ENV = "YOUTUBE_TEST_DATA"
 NON_SPEECH_PATTERN = re.compile(r"\[(music|applause|laughter|silence)\]", re.I)
 YOUTUBE_SEARCH_RESULT_LIMIT = 10
 TRANSCRIPT_BATCH_SIZE = 5
+YOUTUBE_QUOTA_REASONS = {"quotaExceeded", "dailyLimitExceeded"}
 
 
 def _build_search_params(query: str, api_key: str) -> dict[str, str | int]:
@@ -88,13 +91,16 @@ def _create_transcript_api(
 
 
 async def _search_youtube(product: Product) -> dict[str, Any]:
-    api_key = _get_youtube_api_key()
     product_title = product.title.strip()
     if not product_title:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="The product title must not be empty.",
         )
+    if _youtube_test_data_enabled():
+        return _youtube_test_payload(product, "YOUTUBE_TEST_DATA is enabled.")
+
+    api_key = _get_youtube_api_key()
     query = f"{product_title}"
 
     try:
@@ -106,6 +112,12 @@ async def _search_youtube(product: Product) -> dict[str, Any]:
             response.raise_for_status()
             payload = response.json()
     except httpx.HTTPStatusError as exc:
+        if _is_youtube_quota_error(exc.response):
+            print(
+                "YouTube search quota exhausted; returning local test data...",
+                flush=True,
+            )
+            return _youtube_test_payload(product, "YouTube search quota is exhausted.")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="YouTube Data API rejected the search request.",
@@ -123,6 +135,135 @@ async def _search_youtube(product: Product) -> dict[str, Any]:
         )
 
     return payload
+
+
+def _is_youtube_quota_error(response: httpx.Response) -> bool:
+    """Return whether a YouTube error response reports an exhausted quota."""
+    if response.status_code != status.HTTP_403_FORBIDDEN:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return False
+    reasons = {
+        item.get("reason")
+        for item in error.get("errors", [])
+        if isinstance(item, dict)
+    }
+    message = error.get("message")
+    return bool(reasons & YOUTUBE_QUOTA_REASONS) or (
+        isinstance(message, str) and "quota" in message.casefold()
+    )
+
+
+def _youtube_test_data_enabled() -> bool:
+    return os.getenv(YOUTUBE_TEST_DATA_ENV, "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _youtube_test_payload(product: Product, reason: str) -> dict[str, Any]:
+    """Return local, clearly labeled fixture data with the production schema."""
+    fixture_reviews = [
+        {
+            "score": 0.55,
+            "label": "positive",
+            "summary": "Test fixture: everyday performance was reliable and easy to use.",
+            "aspect": "Everyday use",
+            "evidence": "It held up well during everyday use and was easy to operate.",
+        },
+        {
+            "score": 0.05,
+            "label": "neutral",
+            "summary": "Test fixture: performance was acceptable, with no standout result.",
+            "aspect": "Performance",
+            "evidence": "Performance was acceptable, but it did not stand out either way.",
+        },
+        {
+            "score": -0.25,
+            "label": "negative",
+            "summary": "Test fixture: initial setup was slower than expected.",
+            "aspect": "Setup",
+            "evidence": "The initial setup took longer than expected.",
+        },
+    ]
+    items = []
+    review_analyses = []
+    previews = []
+    search_url = (
+        "https://www.youtube.com/results?search_query="
+        f"{quote_plus(product.title + ' review')}"
+    )
+
+    for index, fixture in enumerate(fixture_reviews, start=1):
+        title = f"Test review {index}: {product.title}"
+        sentiment = {
+            "label": fixture["label"],
+            "score": fixture["score"],
+            "summary": fixture["summary"],
+            "aspects": [
+                {
+                    "aspect": fixture["aspect"],
+                    "label": fixture["label"],
+                    "score": fixture["score"],
+                    "evidence": fixture["evidence"],
+                }
+            ],
+        }
+        items.append(
+            {
+                "id": {"kind": "prvsa#testVideo", "videoId": f"test-{index}"},
+                "snippet": {
+                    "title": title,
+                    "description": "Local P.R.V.S.A. test fixture; not a real review.",
+                    "channelTitle": "P.R.V.S.A. Test Fixture",
+                },
+                "transcript": {
+                    "language": "English",
+                    "languageCode": "en",
+                    "isGenerated": False,
+                    "text": fixture["evidence"],
+                    "segments": [
+                        {"text": fixture["evidence"], "start": 0.0, "duration": 5.0}
+                    ],
+                },
+                "statistics": {
+                    "viewCount": 0,
+                    "likeCount": 0,
+                    "likeToViewRatio": None,
+                    "likeToViewPercentage": None,
+                    "viewsPerLike": None,
+                },
+                "sentiment": sentiment,
+                "sourceData": {"testFixture": True},
+            }
+        )
+        review_analyses.append({"videoTitle": title, "sentiment": sentiment})
+        previews.append(
+            {
+                "url": search_url,
+                "title": title,
+                "channelTitle": "P.R.V.S.A. Test Fixture",
+                "thumbnail": None,
+            }
+        )
+
+    return {
+        "kind": "prvsa#youtubeTestData",
+        "searchProvider": "local-test-fixture",
+        "testData": True,
+        "testDataReason": reason,
+        "pageInfo": {"totalResults": len(items), "resultsPerPage": len(items)},
+        "items": items,
+        "reviewAnalyses": review_analyses,
+        "testVideoPreviews": previews,
+    }
 
 
 def _parse_video_ids(payload: dict[str, Any]) -> list[str]:
@@ -487,6 +628,15 @@ async def _youtube_events(
     product: Product, search_results: dict[str, Any], video_ids: list[str]
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield stream events: videos (once transcripts are known), then the result."""
+    if search_results.get("testData") is True:
+        previews = search_results.get("testVideoPreviews")
+        yield {
+            "type": "videos",
+            "videos": previews if isinstance(previews, list) else [],
+        }
+        yield {"type": "result", "data": search_results}
+        return
+
     # Statistics are independent of transcripts/sentiment; fetch in background.
     print("Gathering YouTube video statistics...", flush=True)
     statistics_task = asyncio.create_task(_fetch_video_statistics(video_ids))
@@ -515,7 +665,14 @@ async def _youtube_events(
         while (progress_event := await progress_queue.get()) is not None:
             yield progress_event
         analyses, summary = await analysis_task
-        statistics = await statistics_task
+        try:
+            statistics = await statistics_task
+        except HTTPException as exc:
+            # Statistics improve the evidence record but are not required for
+            # transcript sentiment, so let the otherwise successful analysis
+            # complete without them.
+            statistics = {}
+            search_results["statisticsError"] = exc.detail
     finally:
         statistics_task.cancel()
 
