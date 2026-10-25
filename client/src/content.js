@@ -1,6 +1,6 @@
 const API_ENDPOINTS = new Set(["prices", "shopping", "youtube"]);
 // Endpoints that respond with NDJSON progress events before their final result.
-const STREAMING_ENDPOINTS = new Set(["youtube"]);
+const STREAMING_ENDPOINTS = new Set(["shopping", "youtube"]);
 
 /**
  * POST a request through the extension service worker and wait for the API.
@@ -108,7 +108,7 @@ async function requestProductResearch(product, onResult = () => {}, onProgress =
 
 globalThis.api = Object.freeze({
   prices: (payload) => requestApi("prices", payload),
-  shopping: (payload) => requestApi("shopping", payload),
+  shopping: (payload, onEvent) => requestApiStream("shopping", payload, onEvent),
   youtube: (payload, onEvent) => requestApiStream("youtube", payload, onEvent),
   researchProduct: requestProductResearch,
 });
@@ -176,6 +176,24 @@ setTimeout(async () => {
 
   const analysisUI = globalThis.productAnalysisUI?.mount(product);
 
+  const shoppingRequest = globalThis.api.shopping(product, (event) => {
+    if (event?.type === "shopping-information") {
+      console.log("shopping API update:", event);
+      analysisUI?.showShoppingInformation(event.data);
+    } else if (event?.type === "analysis") {
+      console.log("shopping analysis update:", event);
+      analysisUI?.showShoppingAnalysis(event.analysis);
+    }
+  }).then((result) => {
+    console.log("shopping API result:", result);
+    analysisUI?.showShoppingInformation(result);
+    analysisUI?.showShoppingAnalysis(result?.analysis);
+    return result;
+  }).catch((error) => {
+    console.error("shopping API failed:", error);
+    return null;
+  });
+
   try {
     const result = await globalThis.api.youtube(product, (event) => {
       if (event.type !== "analysis-delta") {
@@ -185,11 +203,17 @@ setTimeout(async () => {
     });
 
     console.log("youtube API result:", result);
-    await summarizeExistingReviews(product, result, analysisUI);
+    const shoppingResult = await shoppingRequest;
+    await summarizeExistingReviews(
+      product,
+      { ...result, shoppingAnalysis: shoppingResult?.analysis ?? null },
+      analysisUI,
+    );
   } catch (error) {
     console.error("youtube API failed:", error);
     analysisUI?.showError(
       error instanceof Error ? error.message : "We could not finish this analysis.",
     );
   }
+
 }, 1000);

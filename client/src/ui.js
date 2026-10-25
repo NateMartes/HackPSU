@@ -51,8 +51,26 @@
       .video { position: relative; display: block; width: 70px; height: 42px; flex: 0 0 70px; overflow: hidden; border: 1px solid #d4d9dd; border-radius: 7px; background: #26313a; text-decoration: none; transition: transform 120ms ease, border-color 120ms ease; }
       .video img { width: 100%; height: 100%; object-fit: cover; }
       .video::after { content: "▶"; position: absolute; top: 50%; left: 50%; display: grid; width: 20px; height: 16px; place-items: center; border-radius: 5px; background: rgba(0,0,0,.76); color: #fff; font-size: 8px; transform: translate(-50%, -50%); }
+      .video-placeholder { border-color: #dfe4e7; background: #e7ebee; pointer-events: none; }
+      .video-placeholder::after { content: ""; position: absolute; inset: 0; display: block; width: 45%; height: auto; border-radius: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.78), transparent); animation: shimmer 1.25s ease-in-out infinite; transform: translateX(-120%); }
       .video:hover { border-color: var(--accent-deep); transform: translateY(-1px); }
+      .video-placeholder:hover { border-color: #dfe4e7; transform: none; }
       .video-fallback { display: grid; width: 100%; height: 100%; place-items: center; color: #fff; font-size: 9px; font-weight: 700; }
+      .shopping { margin-top: 15px; }
+      .shopping-overview { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fffaf2; }
+      .shopping-score { display: flex; align-items: center; gap: 7px; min-width: 0; }
+      .shopping-stars { --rating-fill: 0%; position: relative; display: inline-block; color: #d5dadd; font-size: 17px; letter-spacing: 1px; line-height: 1; white-space: nowrap; }
+      .shopping-stars::before { content: "★★★★★"; position: absolute; inset: 0 auto 0 0; width: var(--rating-fill); overflow: hidden; color: var(--accent); white-space: nowrap; }
+      .shopping-rating { color: #713b00; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .shopping-count { color: var(--muted); font-size: 12px; }
+      .shopping-sentiment { margin-top: 7px; }
+      .shopping-reviews { display: grid; gap: 7px; padding: 0 7px 7px; }
+      .shopping-review { padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--wash); }
+      .shopping-review-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 10px; font-weight: 700; }
+      .shopping-review-copy { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: #3e4b55; font-size: 12px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+      .shopping-analysis { margin-top: 7px; }
+      .shopping-analysis summary { padding: 9px 10px; font-size: 12px; }
+      .shopping-review-heading { padding: 0 12px 7px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
       .result { margin-top: 15px; }
       .score-card { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--wash); }
       .verdict-label { color: var(--muted); font-size: 11px; }
@@ -85,9 +103,33 @@
       <div class="body">
         <div class="status"><span class="spinner" aria-hidden="true"></span><span class="status-copy">Finding product reviews…</span></div>
         <div class="progress" role="progressbar" aria-label="Analysis in progress"></div>
-        <section class="sources" hidden><div class="section-label">Reviews being analyzed</div><div class="videos"></div></section>
+        <section class="sources">
+          <div class="section-label">Reviews being analyzed</div>
+          <div class="videos" aria-busy="true" aria-label="Loading video reviews">
+            <span class="video video-placeholder" aria-hidden="true"></span>
+            <span class="video video-placeholder" aria-hidden="true"></span>
+            <span class="video video-placeholder" aria-hidden="true"></span>
+          </div>
+        </section>
+        <section class="shopping" hidden>
+          <div class="section-label">Ratings from Google Products</div>
+          <div class="shopping-overview">
+            <div class="shopping-score"><span class="shopping-stars" aria-hidden="true">★★★★★</span><span class="shopping-rating"></span></div>
+            <span class="shopping-count"></span>
+          </div>
+          <div class="shopping-sentiment score-card" hidden>
+            <div><div class="verdict-label">Overall shopping sentiment</div><div class="shopping-verdict verdict"></div></div>
+            <div class="shopping-sentiment-score score"></div>
+          </div>
+          <details class="shopping-analysis" hidden>
+            <summary>Reviews Summary</summary>
+            <p class="shopping-analysis-copy summary-copy"></p>
+            <div class="shopping-review-heading" hidden></div>
+            <div class="shopping-reviews"></div>
+          </details>
+        </section>
         <section class="result" aria-busy="true">
-          <div class="score-card"><div><div class="verdict-label">Overall video sentiment</div><div class="verdict skeleton" aria-hidden="true"></div></div><div class="score skeleton" aria-hidden="true"></div></div>
+          <div class="score-card"><div><div class="verdict-label">Overall video sentiment</div><div class="video-verdict verdict skeleton" aria-hidden="true"></div></div><div class="video-score score skeleton" aria-hidden="true"></div></div>
           <div class="analysis-placeholder" aria-hidden="true"><div class="skeleton"></div></div>
           <details class="video-analysis" hidden><summary>Video Analysis</summary><p class="video-analysis-copy summary-copy"></p></details>
           <details class="full-summary" hidden><summary>Full Summary</summary><p class="full-summary-copy summary-copy"></p></details>
@@ -132,9 +174,20 @@
     const progress = shadow.querySelector(".progress");
     const sources = shadow.querySelector(".sources");
     const videosContainer = shadow.querySelector(".videos");
+    const shoppingSection = shadow.querySelector(".shopping");
+    const shoppingStars = shadow.querySelector(".shopping-stars");
+    const shoppingRating = shadow.querySelector(".shopping-rating");
+    const shoppingCount = shadow.querySelector(".shopping-count");
+    const shoppingSentiment = shadow.querySelector(".shopping-sentiment");
+    const shoppingVerdict = shadow.querySelector(".shopping-verdict");
+    const shoppingSentimentScore = shadow.querySelector(".shopping-sentiment-score");
+    const shoppingReviewHeading = shadow.querySelector(".shopping-review-heading");
+    const shoppingReviews = shadow.querySelector(".shopping-reviews");
+    const shoppingAnalysis = shadow.querySelector(".shopping-analysis");
+    const shoppingAnalysisCopy = shadow.querySelector(".shopping-analysis-copy");
     const resultSection = shadow.querySelector(".result");
-    const verdict = shadow.querySelector(".verdict");
-    const score = shadow.querySelector(".score");
+    const verdict = shadow.querySelector(".video-verdict");
+    const score = shadow.querySelector(".video-score");
     const analysisPlaceholder = shadow.querySelector(".analysis-placeholder");
     const videoAnalysis = shadow.querySelector(".video-analysis");
     const videoAnalysisCopy = shadow.querySelector(".video-analysis-copy");
@@ -146,6 +199,80 @@
     title.textContent = product?.title || "Product analysis";
     panel.setAttribute("aria-label", `Review analysis for ${product?.title || "this product"}`);
     shadow.querySelector(".close").addEventListener("click", () => host.remove());
+
+    function showShoppingInformation(data) {
+      const numericRating = Number(data?.rating);
+      const hasRating = data?.rating != null && data.rating !== "" && Number.isFinite(numericRating);
+      const reviewCount = data?.reviews;
+      const reviews = Array.isArray(data?.review_details)
+        ? data.review_details.filter((review) => typeof review?.text === "string" && review.text.trim())
+        : [];
+
+      if (!hasRating && reviewCount == null && !reviews.length) return;
+
+      const boundedRating = hasRating ? Math.max(0, Math.min(5, numericRating)) : 0;
+      shoppingStars.hidden = !hasRating;
+      shoppingStars.style.setProperty("--rating-fill", `${(boundedRating / 5) * 100}%`);
+      shoppingRating.textContent = hasRating ? numericRating.toFixed(1) : "Not rated";
+      shoppingRating.setAttribute(
+        "aria-label",
+        hasRating ? `${numericRating.toFixed(1)} out of 5 stars` : "No aggregate rating",
+      );
+      shoppingCount.textContent = reviewCount == null
+        ? `${reviews.length} review excerpt${reviews.length === 1 ? "" : "s"}`
+        : `${reviewCount} reviews`;
+      shoppingReviews.replaceChildren();
+      const visibleReviewCount = Math.min(reviews.length, 3);
+      shoppingReviewHeading.textContent = `${visibleReviewCount} review excerpt${visibleReviewCount === 1 ? "" : "s"}`;
+      shoppingReviewHeading.hidden = !visibleReviewCount;
+
+      for (const review of reviews.slice(0, 3)) {
+        const card = document.createElement("article");
+        card.className = "shopping-review";
+        const meta = document.createElement("div");
+        meta.className = "shopping-review-meta";
+        const source = document.createElement("span");
+        source.textContent = review.source || "Shopper review";
+        const rating = document.createElement("span");
+        const numericReviewRating = Number(review.rating);
+        rating.textContent = review.rating != null && review.rating !== "" && Number.isFinite(numericReviewRating)
+          ? `★ ${numericReviewRating.toFixed(1)}`
+          : "";
+        const copy = document.createElement("p");
+        copy.className = "shopping-review-copy";
+        copy.textContent = review.text.trim();
+        meta.append(source, rating);
+        card.append(meta, copy);
+        shoppingReviews.append(card);
+      }
+
+      if (reviews.length) {
+        shoppingAnalysisCopy.textContent = "Analyzing Google Products reviews…";
+        shoppingAnalysis.hidden = false;
+      }
+      shoppingSection.hidden = false;
+    }
+
+    function showShoppingAnalysis(analysis) {
+      if (!analysis || typeof analysis !== "object") return;
+      const label = ["positive", "neutral", "negative"].includes(analysis.label)
+        ? analysis.label
+        : "neutral";
+      const formattedScore = scoreText(analysis.score);
+      const displayLabel = label[0].toUpperCase() + label.slice(1);
+      shoppingVerdict.textContent = displayLabel;
+      shoppingVerdict.className = `shopping-verdict verdict ${label}`;
+      shoppingSentimentScore.textContent = formattedScore;
+      shoppingSentimentScore.className = `shopping-sentiment-score score ${label}`;
+      shoppingSentimentScore.setAttribute(
+        "aria-label",
+        `Shopping sentiment score ${formattedScore} on a scale from negative one to positive one`,
+      );
+      shoppingAnalysisCopy.textContent = analysis.summary || "No shopping review summary was returned.";
+      shoppingSentiment.hidden = false;
+      shoppingAnalysis.hidden = false;
+      shoppingSection.hidden = false;
+    }
 
     function showVideos(videos) {
       videosContainer.replaceChildren();
@@ -174,11 +301,14 @@
         }
         videosContainer.append(link);
       }
+      videosContainer.setAttribute("aria-busy", "false");
+      videosContainer.setAttribute("aria-label", "Video reviews being analyzed");
       if (videosContainer.childElementCount) {
         sources.hidden = false;
         const count = videosContainer.childElementCount;
         statusCopy.textContent = `Analyzing ${count} video review${count === 1 ? "" : "s"}…`;
       } else {
+        sources.hidden = true;
         statusCopy.textContent = "Analyzing available review transcripts…";
       }
     }
@@ -198,10 +328,10 @@
       }
       const label = ["positive", "neutral", "negative"].includes(summary.label) ? summary.label : "neutral";
       verdict.textContent = label;
-      verdict.className = `verdict ${label}`;
+      verdict.className = `video-verdict verdict ${label}`;
       verdict.removeAttribute("aria-hidden");
       score.textContent = scoreText(summary.score);
-      score.className = `score ${label}`;
+      score.className = `video-score score ${label}`;
       score.removeAttribute("aria-hidden");
       score.setAttribute("aria-label", `Sentiment score ${score.textContent} on a scale from negative one to positive one`);
       analysisPlaceholder.hidden = true;
@@ -210,6 +340,7 @@
         || (!data?.summarizedLocally ? summary.summary : "")
         || "No video analysis was returned.";
       fullSummary.hidden = !data?.summarizedLocally;
+      fullSummary.open = Boolean(data?.summarizedLocally);
       fullSummaryCopy.textContent = data?.summarizedLocally
         ? (summary.summary || "No full summary was returned.")
         : "";
@@ -276,6 +407,8 @@
         if (event?.type === "videos") showVideos(event.videos);
         else handleAnalysisEvent(event);
       },
+      showShoppingAnalysis,
+      showShoppingInformation,
       showError,
       showFullSummaryStream,
       showProcessing,
