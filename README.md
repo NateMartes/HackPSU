@@ -159,9 +159,9 @@ The backend exposes three streaming `POST` endpoints:
 
 | Endpoint | Returns |
 | --- | --- |
-| `/api/prices` | Comparable offers followed by price-value sentiment |
+| `/api/prices` | Comparable offers followed by price-value sentiment; the final result retains the offers |
 | `/api/shopping` | Rating and review excerpts followed by written-review sentiment |
-| `/api/youtube` | Video previews and per-review analysis followed by the final video result |
+| `/api/youtube` | Video previews and per-review analysis followed by the enriched source records, transcripts, statistics, and sentiment |
 
 Each endpoint accepts the product object parsed by the extension:
 
@@ -180,7 +180,11 @@ Each endpoint accepts the product object parsed by the extension:
 ```
 
 Responses use newline-delimited JSON so the UI can render source data and model
-output as they arrive. The API also allows requests from
+output as they arrive. Final events retain the gathered source data in addition
+to the analysis fields already consumed by the extension. Price and shopping
+responses expose complete provider records under `sourceData`; YouTube items
+retain their source snippet, timed transcript segments, raw and derived
+statistics, and sentiment analysis. The API also allows requests from
 `http://localhost:3000` for a separate local web frontend.
 
 ## Project structure

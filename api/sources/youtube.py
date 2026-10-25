@@ -184,6 +184,7 @@ def _exclude_brand_owned_videos(
         return payload
 
     filtered_items = []
+    excluded_items = []
     for item in items:
         if not isinstance(item, dict):
             filtered_items.append(item)
@@ -199,8 +200,14 @@ def _exclude_brand_owned_videos(
         )
         if not is_brand_channel:
             filtered_items.append(item)
+        else:
+            excluded_items.append(item)
 
-    return {**payload, "items": filtered_items}
+    return {
+        **payload,
+        "items": filtered_items,
+        "excludedBrandOwnedItems": excluded_items,
+    }
 
 
 def _parse_count(value: Any) -> int | None:
@@ -258,7 +265,8 @@ def _parse_video_statistics(payload: dict[str, Any]) -> dict[str, dict[str, Any]
                 "viewsPerLike": (
                     round(views_per_like, 2) if views_per_like is not None else None
                 ),
-            }
+            },
+            "rawStatistics": raw_statistics,
         }
 
     return results
@@ -326,12 +334,14 @@ def _fetch_transcript(
         transcript = _create_transcript_api(proxy_credentials).fetch(
             video_id, languages=["en"]
         )
+        raw_segments = transcript.to_raw_data()
         result = {
             "transcript": {
                 "language": transcript.language,
                 "languageCode": transcript.language_code,
                 "isGenerated": transcript.is_generated,
-                "text": _aggregate_transcript(transcript.to_raw_data()),
+                "text": _aggregate_transcript(raw_segments),
+                "segments": raw_segments,
             }
         }
     except YouTubeTranscriptApiException as exc:
@@ -417,49 +427,6 @@ def _video_id_from_item(item: dict[str, Any]) -> str | None:
         return None
     video_id = identifier.get("videoId")
     return video_id if isinstance(video_id, str) else None
-
-
-def _public_review_analyses(value: Any) -> list[dict[str, Any]]:
-    """Return only the existing review analyses needed by the local aggregator."""
-    if not isinstance(value, list):
-        return []
-
-    public_analyses = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        sentiment = item.get("sentiment")
-        if not isinstance(sentiment, dict):
-            continue
-        score = sentiment.get("score")
-        if not isinstance(score, (int, float)) or isinstance(score, bool):
-            continue
-        public_analyses.append(
-            {
-                "videoTitle": item.get("videoTitle"),
-                "sentiment": {
-                    key: sentiment[key]
-                    for key in ("label", "score", "summary", "aspects")
-                    if key in sentiment
-                },
-            }
-        )
-    return public_analyses
-
-
-def filter_results(payload: dict[str, Any]) -> dict[str, Any]:
-    """Keep compact per-review analyses for the on-device aggregator.
-
-    Videos are already sent to the client in the earlier "videos" event.
-    """
-    filtered: dict[str, Any] = {
-        "reviewAnalyses": _public_review_analyses(payload.get("reviewAnalyses")),
-    }
-    summary_error = payload.get("sentimentSummaryError")
-    if isinstance(summary_error, str) and summary_error:
-        filtered["sentimentSummaryError"] = summary_error
-
-    return filtered
 
 
 def _has_transcript(transcript_result: dict[str, Any] | None) -> bool:
@@ -557,8 +524,10 @@ async def _youtube_events(
     results = _merge_sentiment(results, analyses)
     results.update(summary)
 
-    print("Filtering API results...", flush=True)
-    yield {"type": "result", "data": filter_results(results)}
+    # Return the complete enriched search response. Existing consumers can keep
+    # reading reviewAnalyses, while future consumers can use the source snippets,
+    # transcripts, statistics, and per-video sentiment retained on each item.
+    yield {"type": "result", "data": results}
 
 
 def _ndjson(event: dict[str, Any]) -> bytes:
@@ -580,7 +549,9 @@ async def youtube(product: Product) -> StreamingResponse:
           Tagged partial structured output from cloud Gemini.
       {"type": "analysis-result", "reviewIndex", "reviewCount", "videoTitle", "sentiment"}
           A complete schema-validated review analysis.
-      {"type": "result", "data": {"reviewAnalyses", "sentimentSummaryError"?}}
+      {"type": "result", "data":
+        {YouTube search response with enriched "items", "reviewAnalyses",
+         "sentimentSummaryError"?}}
       {"type": "error", "status": int, "error": str}   (sent instead of "result")
     """
     # Search before opening the stream so config/search failures still return

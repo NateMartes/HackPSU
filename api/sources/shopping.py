@@ -75,7 +75,7 @@ def _product_lookup_attempts(result: dict, serpapi_key: str) -> list[dict[str, s
 
 def _fetch_product_details(
     results: list, product: Product, serpapi_key: str
-) -> tuple[dict, dict]:
+) -> tuple[dict, dict, dict]:
     last_error = "No shopping result included a usable product token."
     for result in _rank_product_candidates(results, product):
         for params in _product_lookup_attempts(result, serpapi_key):
@@ -83,7 +83,7 @@ def _fetch_product_details(
             error = details.get("error")
             product_data = details.get("product_results")
             if not error and isinstance(product_data, dict) and product_data:
-                return result, product_data
+                return result, product_data, details
             if isinstance(error, str) and error:
                 last_error = error
 
@@ -93,7 +93,7 @@ def _fetch_product_details(
     )
 
 
-def _fetch_shopping_information(product: Product) -> dict:
+def _fetch_shopping_information(product: Product) -> tuple[dict, dict]:
     serpapi_key = os.getenv("SERPAPI_KEY", "").strip()
     if not serpapi_key:
         raise HTTPException(
@@ -117,7 +117,9 @@ def _fetch_shopping_information(product: Product) -> dict:
     if not results:
         raise HTTPException(status_code=404, detail="No shopping results found.")
 
-    result, product_data = _fetch_product_details(results, product, serpapi_key)
+    result, product_data, product_details = _fetch_product_details(
+        results, product, serpapi_key
+    )
     raw_reviews = product_data.get("user_reviews", [])
 
     review_details = [
@@ -134,7 +136,20 @@ def _fetch_shopping_information(product: Product) -> dict:
         "reviews": product_data.get("reviews", result.get("reviews")),
         "review_details": review_details,
     }
-    return shopping_information
+    return (
+        shopping_information,
+        {
+            # Keep the complete provider records for future evidence-graph use.
+            # Request configuration and API credentials are intentionally absent.
+            "shoppingResults": results,
+            "selectedShoppingResult": result,
+            "productDetails": {
+                key: value
+                for key, value in product_details.items()
+                if key not in {"search_metadata", "search_parameters"}
+            },
+        },
+    )
 
 
 def _ndjson(event: dict) -> bytes:
@@ -154,13 +169,17 @@ async def shopping(product: Product) -> StreamingResponse:
       {"type": "error", "status": int, "error": str} (instead of analysis/result)
     """
     # Fetch before opening the stream so lookup failures retain their HTTP status.
-    shopping_information = await asyncio.to_thread(
+    shopping_information, source_data = await asyncio.to_thread(
         _fetch_shopping_information, product
     )
+    complete_shopping_information = {
+        **shopping_information,
+        "sourceData": source_data,
+    }
 
     async def event_stream() -> AsyncIterator[bytes]:
         yield _ndjson(
-            {"type": "shopping-information", "data": shopping_information}
+            {"type": "shopping-information", "data": complete_shopping_information}
         )
 
         try:
@@ -174,7 +193,10 @@ async def shopping(product: Product) -> StreamingResponse:
             yield _ndjson(
                 {
                     "type": "result",
-                    "data": {**shopping_information, "analysis": dumped_analysis},
+                    "data": {
+                        **complete_shopping_information,
+                        "analysis": dumped_analysis,
+                    },
                 }
             )
         except HTTPException as exc:
