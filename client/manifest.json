@@ -1,8 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "HackPSU",
-  "description": "Product research assistance while you shop.",
+  "name": "P.R.V.S.A. — Price Review Video Sentiment Aggregator",
+  "short_name": "P.R.V.S.A.",
+  "description": "Price, review, and video sentiment analysis while you shop.",
   "version": "0.1.0",
+  "icons": {
+    "16": "assets/icons/prvsa-16.png",
+    "32": "assets/icons/prvsa-32.png",
+    "48": "assets/icons/prvsa-48.png",
+    "128": "assets/icons/prvsa-128.png"
+  },
   "background": {
     "service_worker": "src/background.js"
   },
@@ -22,6 +29,16 @@
         "src/content.js"
       ],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "assets/prvsa-icon.png"
+      ],
+      "matches": [
+        "https://*.amazon.com/*"
+      ]
     }
   ]
 }

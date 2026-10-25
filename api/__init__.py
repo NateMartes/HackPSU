@@ -1,1 +1,1 @@
-"""HackPSU API package."""
+"""P.R.V.S.A. API package."""

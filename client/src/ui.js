@@ -1,7 +1,8 @@
 (function initializeProductAnalysisUI(root) {
   "use strict";
 
-  const HOST_ID = "review-lens-analysis";
+  const HOST_ID = "prvsa-analysis";
+  const ICON_URL = chrome.runtime.getURL("assets/prvsa-icon.png");
 
   const template = `
     <style>
@@ -27,11 +28,12 @@
       }
       .mark {
         display: grid; width: 30px; height: 30px; flex: 0 0 30px; place-items: center;
-        border-radius: 9px; background: #17212b; color: var(--accent); font-size: 16px; font-weight: 800;
+        overflow: hidden; border-radius: 9px; background: transparent;
       }
+      .mark img { width: 100%; height: 100%; object-fit: cover; }
       .heading { min-width: 0; flex: 1; }
-      .eyebrow { color: var(--accent-deep); font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
-      h2 { overflow: hidden; margin: 1px 0 0; color: var(--ink); font: 700 14px/1.3 Arial, Helvetica, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+      .app-title { color: var(--ink); font-size: 14px; font-weight: 800; letter-spacing: .06em; }
+      h2 { overflow: hidden; margin: 2px 0 0; color: var(--ink); font: 600 13px/1.35 Arial, Helvetica, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
       button { appearance: none; border: 0; background: none; color: inherit; font: inherit; }
       .window-controls { display: flex; align-items: center; gap: 2px; }
       .window-control { display: grid; width: 30px; height: 30px; cursor: pointer; place-items: center; border-radius: 50%; color: #596773; font-size: 22px; line-height: 1; }
@@ -44,17 +46,17 @@
       .panel.minimized .minimize { padding-bottom: 0; font-size: 18px; }
       .body { min-height: 0; flex: 1 1 auto; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; padding: 15px; }
       .status { display: flex; align-items: center; gap: 9px; min-height: 24px; color: #46545f; font-size: 13px; }
-      .spinner { width: 16px; height: 16px; flex: 0 0 16px; border: 2px solid #d8dde1; border-top-color: var(--accent-deep); border-radius: 50%; animation: spin .75s linear infinite; }
+      .spinner { width: 16px; height: 16px; flex: 0 0 16px; border: 2px solid; border-color: #ff2a20 #ffe600 #20c763 #2856ff; border-radius: 50%; animation: spin .75s linear infinite; }
       .status.done .spinner { display: none; }
       .status.done::before { content: "✓"; display: grid; width: 17px; height: 17px; place-items: center; border-radius: 50%; background: #157347; color: #fff; font-size: 11px; font-weight: 700; }
       .status.failed .spinner { display: none; }
       .status.failed::before { content: "!"; display: grid; width: 17px; height: 17px; place-items: center; border-radius: 50%; background: #b42318; color: #fff; font-size: 11px; font-weight: 700; }
       .progress { position: relative; height: 3px; margin: 11px 0 3px; overflow: hidden; border-radius: 99px; background: #e9ecef; }
-      .progress::after { content: ""; position: absolute; inset: 0; width: 48%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), #ffbd5b); animation: shimmer 1.25s ease-in-out infinite; transform: translateX(-110%); }
+      .progress::after { content: ""; position: absolute; inset: 0; width: 58%; border-radius: inherit; background: linear-gradient(90deg, #ff2a20 0%, #ff8a00 16%, #ffe600 31%, #20c763 47%, #00b8f5 63%, #2856ff 79%, #8d2cff 100%); animation: shimmer 1.25s ease-in-out infinite; transform: translateX(-110%); }
       .final-result { margin-top: 12px; border-color: #efb44f; background: #fff8e9; }
       .final-result .verdict-label { color: #713b00; font-weight: 700; }
-      .full-summary { margin-top: 12px; border-color: #f0c36d; background: #fffbf3; }
-      .full-summary summary { color: #713b00; }
+      .full-summary { margin-top: 12px; border-color: #a9cce8; background: #f3f8ff; }
+      .full-summary summary { color: #17466f; }
       .sources { margin-top: 15px; }
       .section-label { margin-bottom: 8px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .045em; text-transform: uppercase; }
       .videos { display: flex; gap: 8px; }
@@ -81,7 +83,7 @@
       .price-offer-value { color: #17466f; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .price-offer-meta { grid-column: 1 / -1; color: var(--muted); font-size: 10px; }
       .shopping { margin-top: 15px; }
-      .shopping-overview { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fffaf2; }
+      .shopping-overview { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; border: 1px solid #a9cce8; border-radius: 10px; background: #f3f8ff; }
       .shopping-score { display: flex; align-items: center; gap: 7px; min-width: 0; }
       .shopping-stars { --rating-fill: 0%; position: relative; display: inline-block; color: #d5dadd; font-size: 17px; letter-spacing: 1px; line-height: 1; white-space: nowrap; }
       .shopping-stars::before { content: "★★★★★"; position: absolute; inset: 0 auto 0 0; width: var(--rating-fill); overflow: hidden; color: var(--accent); white-space: nowrap; }
@@ -125,8 +127,8 @@
     </style>
     <aside class="panel" role="dialog" aria-labelledby="analysis-title" aria-live="polite">
       <header class="header">
-        <div class="mark" aria-hidden="true">R</div>
-        <div class="heading"><div class="eyebrow">Review lens</div><h2 id="analysis-title"></h2></div>
+        <div class="mark" aria-hidden="true"><img src="${ICON_URL}" alt=""></div>
+        <div class="heading"><div class="app-title">P.R.V.S.A.</div><h2 id="analysis-title"></h2></div>
         <div class="window-controls">
           <button class="minimize window-control" type="button" aria-label="Minimize analysis" aria-expanded="true" title="Minimize">−</button>
           <button class="close window-control" type="button" aria-label="Close analysis" title="Close">×</button>
