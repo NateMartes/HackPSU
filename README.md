@@ -59,7 +59,13 @@ The route then sends the complete collected payload to Gemini in one request,
 streams the schema-validated analysis, and finishes with a `result` event.
 Specific aspect evidence is retained only when it is an exact excerpt from the
 supplied review text. It requires `SERPAPI_KEY` and `GEMINI_API_KEY`. The price
-route remains a basic lookup. Requests from `http://localhost:3000` are allowed
+route collects Google Shopping offers and asks Gemini to assess whether the
+current product price is favorable relative to genuinely comparable offers.
+It streams the collected offers immediately as a `price-information` NDJSON
+event, sends the completed value sentiment as an `analysis` event, and ends
+with a compact `result` event containing only the analysis; it does not repeat
+the offers. The analysis uses the same label, score, summary, and aspect shape
+as the other source analyses. Requests from `http://localhost:3000` are allowed
 by the CORS configuration.
 
 ## Chrome extension
@@ -75,29 +81,40 @@ const result = await globalThis.api.prices({ query: "headphones" });
 
 The extension only runs on Amazon pages. It parses the default product once
 when the page loads and opens an on-page analysis card. The card progressively
-shows the YouTube reviews being analyzed. It averages the scores already
-returned for those reviews, then uses Chrome's on-device Gemini Nano Prompt API
-to write a cross-review summary without creating or changing any score. The
-result card immediately shows the deterministic score on the `-1` to `+1` scale
-and the existing combined findings under **Video Analysis**. The extension
+shows the YouTube reviews being analyzed. It combines the existing source scores
+with fixed weights (YouTube 45%, Google Products reviews 35%, and price value
+20%), excluding neutral sources and re-normalizing the remaining weights. If all
+available sources are neutral, the final score is neutral. It then uses Chrome's
+on-device Gemini Nano Prompt API to write a cross-review summary of no more than
+75 words without creating or changing any score. The result card immediately
+shows the final weighted score on the `-1` to `+1` scale while retaining the
+separate source scores. The header provides independent minimize/restore and
+close controls. The card also shows the existing combined findings under
+**Video Analysis**. The extension
 checks whether Gemini Nano is already available. If it is, Nano automatically
-streams a separate cross-video **Full Summary** while the video analysis and
-score remain unchanged. If the model is not already available, only Video
+streams a cross-source **Full Summary** at the top of the card. It receives
+precomputed price-range, rating, review-count, and fixed aggregate-score
+metrics so it can cite useful numbers without recalculating them. The video
+analysis and score remain unchanged. If the model is not already available, only Video
 Analysis remains visible and the extension does not start a model download. No additional
 manifest permission or Gemini API key is needed for the on-device summary. The
-The on-page card requests shopping and YouTube concurrently. Shopping ratings
+on-page card requests prices, shopping, and YouTube concurrently. Comparable
+offers appear as soon as the price stream starts, followed by a price-value
+score and summary when its Gemini analysis finishes. Shopping ratings
 and up to three review excerpts appear as soon as the first shopping stream
 event arrives, without waiting for Gemini's shopping analysis. When that
 analysis arrives, the card displays its sentiment in the same score-card format
 as video sentiment and places its summary plus review excerpts in one collapsed
-Reviews Summary. Gemini Nano receives both the shopping analysis and the video
-analyses when it writes the final Full Summary; it cannot replace their existing
-scores. The price API remains available to callers but is not requested by the
-card:
+Reviews Summary. Gemini Nano receives the price analysis, shopping analysis,
+and video analyses when it writes the final Full Summary; it cannot replace
+their existing scores:
 
 ```js
 console.log(globalThis.product);
-const youtubeResult = await globalThis.api.youtube(globalThis.product);
+const priceResult = await globalThis.api.prices(globalThis.product, (event) => {
+  if (event.type === "price-information") console.log(event.data.offers);
+  if (event.type === "analysis") console.log(event.analysis);
+});
 ```
 
 Call `globalThis.api.researchProduct(...)` when a consumer needs all sources.
