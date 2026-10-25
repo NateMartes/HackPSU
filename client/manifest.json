@@ -23,6 +23,7 @@
         "https://*.amazon.com/*"
       ],
       "js": [
+        "vendor/d3.v7.min.js",
         "src/parser.js",
         "src/nano.js",
         "src/ui.js",

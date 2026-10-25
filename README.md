@@ -70,6 +70,18 @@ Neutral or unavailable sources are excluded and the remaining weights are
 rebalanced. If every available source is neutral, the final result remains
 neutral—the extension does not invent a stronger opinion.
 
+### Interactive evidence graph
+
+The research icon in the analysis header opens a centered D3 evidence graph.
+The Consensus sits between the Amazon listing and the research branches, tracing
+the result back to transcript-backed YouTube
+reviews, Google Products feedback, and individual Google Shopping offers.
+Every source leaf links to the original record when available, or to a focused
+research query as a fallback. The grid canvas
+supports node dragging and zooming as the evidence set grows. Each research
+branch displays its aggregate sentiment and score; hovering over the Consensus
+node animates an RGB flow around that box using the logo's colors.
+
 ### Optional on-device summary
 
 When Chrome's built-in Gemini Nano Prompt API is already available, P.R.V.S.A.
@@ -147,11 +159,18 @@ never placed in the extension.
 | `GEMINI_MODEL` | No | Overrides the default `gemini-3.1-flash-lite` model |
 | `YOUTUBE_PROXY_USERNAME` | No | Webshare Residential username for transcript requests |
 | `YOUTUBE_PROXY_PASSWORD` | No | Webshare Residential password for transcript requests |
+| `YOUTUBE_TEST_DATA` | No | Uses local fixture data and makes no YouTube, transcript, or video-analysis requests |
 
 If YouTube blocks transcript requests from the API host, set both proxy
 variables. The backend uses a direct connection when neither is set and reports
 a configuration error when only one is provided. Keep all credentials out of
 the repository and the Chrome extension.
+
+When the YouTube Data API reports an exhausted search quota, the YouTube route
+returns clearly labeled local fixture data rather than consuming another search
+API. Set `YOUTUBE_TEST_DATA=true` to force this mode without making an initial
+YouTube request. Test responses include `testData: true` and identify their
+provider as `local-test-fixture`; they must not be treated as research evidence.
 
 ## API
 
@@ -159,9 +178,9 @@ The backend exposes three streaming `POST` endpoints:
 
 | Endpoint | Returns |
 | --- | --- |
-| `/api/prices` | Comparable offers followed by price-value sentiment |
+| `/api/prices` | Comparable offers followed by price-value sentiment; the final result retains the offers |
 | `/api/shopping` | Rating and review excerpts followed by written-review sentiment |
-| `/api/youtube` | Video previews and per-review analysis followed by the final video result |
+| `/api/youtube` | Video previews and per-review analysis followed by the enriched source records, transcripts, statistics, and sentiment |
 
 Each endpoint accepts the product object parsed by the extension:
 
@@ -180,7 +199,11 @@ Each endpoint accepts the product object parsed by the extension:
 ```
 
 Responses use newline-delimited JSON so the UI can render source data and model
-output as they arrive. The API also allows requests from
+output as they arrive. Final events retain the gathered source data in addition
+to the analysis fields already consumed by the extension. Price and shopping
+responses expose complete provider records under `sourceData`; YouTube items
+retain their source snippet, timed transcript segments, raw and derived
+statistics, and sentiment analysis. The API also allows requests from
 `http://localhost:3000` for a separate local web frontend.
 
 ## Project structure
@@ -194,6 +217,7 @@ output as they arrive. The API also allows requests from
 └── client/
     ├── manifest.json        # Chrome Manifest V3 configuration
     ├── assets/              # P.R.V.S.A. artwork and extension icons
+    ├── vendor/              # Locally bundled browser dependencies (D3)
     └── src/
         ├── background.js    # API proxy and streaming transport
         ├── parser.js        # Amazon product parser
