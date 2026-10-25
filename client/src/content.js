@@ -113,6 +113,58 @@ globalThis.api = Object.freeze({
   researchProduct: requestProductResearch,
 });
 
+async function summarizeExistingReviews(product, result, analysisUI) {
+  const aggregator = globalThis.nanoAggregator;
+  if (!aggregator) {
+    analysisUI?.showError("The local review aggregator did not load.");
+    return;
+  }
+
+  let fallback;
+  try {
+    fallback = aggregator.combineWithoutNano(result);
+  } catch (error) {
+    analysisUI?.showError(
+      result?.sentimentSummaryError
+        || (error instanceof Error ? error.message : "No review scores were returned."),
+    );
+    return;
+  }
+
+  analysisUI?.showResult(
+    fallback,
+    `Showing ${fallback.reviewCount} existing review result${fallback.reviewCount === 1 ? "" : "s"}`,
+  );
+
+  const runNano = async () => {
+    analysisUI?.showProcessing("Summarizing review results");
+    try {
+      const summary = await aggregator.summarize(product, result, (partialSummary) => {
+        analysisUI?.showFullSummaryStream(partialSummary);
+      });
+      analysisUI?.showResult(
+        summary,
+        "Summarized Findings",
+      );
+    } catch (error) {
+      console.warn("Gemini Nano summarization failed; using existing review text.", error);
+      analysisUI?.showResult(
+        fallback,
+        `Showing ${fallback.reviewCount} existing review result${fallback.reviewCount === 1 ? "" : "s"}`,
+      );
+    }
+  };
+
+  try {
+    const availability = await aggregator.availability();
+    if (availability === "available") {
+      await runNano();
+    }
+  } catch (error) {
+    console.warn("Could not check Gemini Nano availability.", error);
+  }
+}
+
 setTimeout(async () => {
   const product = globalThis.parser.parseProduct(document, location);
   globalThis.product = product;
@@ -126,12 +178,14 @@ setTimeout(async () => {
 
   try {
     const result = await globalThis.api.youtube(product, (event) => {
-      console.log(`youtube API update (${event.type}):`, event);
+      if (event.type !== "analysis-delta") {
+        console.log(`youtube API update (${event.type}):`, event);
+      }
       analysisUI?.handleEvent(event);
     });
 
     console.log("youtube API result:", result);
-    analysisUI?.showResult(result);
+    await summarizeExistingReviews(product, result, analysisUI);
   } catch (error) {
     console.error("youtube API failed:", error);
     analysisUI?.showError(
