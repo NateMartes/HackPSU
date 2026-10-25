@@ -149,6 +149,14 @@ All three research requests run concurrently, and NDJSON events progressively
 update the interface. API credentials remain in the backend environment and are
 never placed in the extension.
 
+## Optional Vultr GPU worker
+
+The Terraform stack in [`infra/vultr-gpu`](infra/vultr-gpu) provisions an
+ephemeral Vultr Cloud GPU, builds this FastAPI application, and runs private
+Hugging Face Text Embeddings Inference services for embeddings and optional
+classification. The extension still connects to `127.0.0.1:8000` through an
+SSH tunnel, so neither FastAPI nor the model servers are exposed publicly.
+
 ## Configuration
 
 | Variable | Required | Purpose |
@@ -160,6 +168,11 @@ never placed in the extension.
 | `YOUTUBE_PROXY_USERNAME` | No | Webshare Residential username for transcript requests |
 | `YOUTUBE_PROXY_PASSWORD` | No | Webshare Residential password for transcript requests |
 | `YOUTUBE_TEST_DATA` | No | Uses local fixture data and makes no YouTube, transcript, or video-analysis requests |
+| `EMBEDDING_BASE_URL` | No | Private TEI embedding-service URL |
+| `EMBEDDING_MODEL_ID` | No | Reports which embedding model produced vectors |
+| `CLASSIFICATION_ENABLED` | No | Enables the optional TEI classification route |
+| `CLASSIFICATION_BASE_URL` | No | Private TEI sequence-classification URL |
+| `CLASSIFICATION_MODEL_ID` | No | Reports which classification model produced predictions |
 
 If YouTube blocks transcript requests from the API host, set both proxy
 variables. The backend uses a direct connection when neither is set and reports
@@ -181,6 +194,9 @@ The backend exposes three streaming `POST` endpoints:
 | `/api/prices` | Comparable offers followed by price-value sentiment; the final result retains the offers |
 | `/api/shopping` | Rating and review excerpts followed by written-review sentiment |
 | `/api/youtube` | Video previews and per-review analysis followed by the enriched source records, transcripts, statistics, and sentiment |
+| `/api/embeddings` | GPU-generated vectors for batches of text |
+| `/api/classify` | Concurrent GPU text classifications when the optional model is enabled |
+| `/api/models/health` | Readiness of the private model services |
 
 Each endpoint accepts the product object parsed by the extension:
 
@@ -214,6 +230,8 @@ statistics, and sentiment analysis. The API also allows requests from
 │   ├── main.py              # FastAPI application
 │   ├── sentiment.py         # Gemini analysis and evidence validation
 │   └── sources/             # Price, shopping, and YouTube routes
+├── infra/
+│   └── vultr-gpu/           # Ephemeral GPU embedding worker (Terraform)
 └── client/
     ├── manifest.json        # Chrome Manifest V3 configuration
     ├── assets/              # P.R.V.S.A. artwork and extension icons
