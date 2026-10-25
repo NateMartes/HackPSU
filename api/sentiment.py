@@ -12,6 +12,7 @@ from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel, Field, ValidationError
 
+from api.local_models import PreparedTexts, prepare_document
 from api.type import Product
 
 
@@ -100,6 +101,13 @@ directly comparable. Evidence must be a short, exact excerpt copied from the
 supplied price information. Return no aspect when there is no exact supporting
 evidence. Use scores as sentiment intensity: -1 is strongly negative, 0 is
 neutral, and 1 is strongly positive.
+""".strip()
+
+LOCAL_SIGNAL_INSTRUCTIONS = """
+Local model signals are auxiliary, fallible metadata produced by a smaller
+classifier. Use them as a consistency check only. Base every conclusion and
+piece of evidence on the supplied source text, and do not copy a local label
+when the source evidence does not support it.
 """.strip()
 
 AnalysisModel = TypeVar("AnalysisModel", bound=BaseModel)
@@ -279,11 +287,14 @@ async def _analyze_video(
     review_index: int,
     review_count: int,
     on_progress: ProgressCallback | None,
+    local_model: dict[str, Any] | None = None,
 ) -> VideoSentiment:
     prompt = (
         f"Product:\n{json.dumps(_product_context(product), ensure_ascii=False)}\n\n"
         f"Video title:\n{video_title or 'Unknown'}\n\n"
-        f"Transcript:\n<transcript>{transcript}</transcript>"
+        f"Transcript:\n<transcript>{transcript}</transcript>\n\n"
+        "Auxiliary local model metadata:\n"
+        f"<local_model>{json.dumps(local_model or {}, ensure_ascii=False)}</local_model>"
     )
     event_context = {
         "reviewIndex": review_index,
@@ -305,7 +316,9 @@ async def _analyze_video(
         model=model,
         contents=prompt,
         config=types.GenerateContentConfig(
-            system_instruction=VIDEO_ANALYSIS_INSTRUCTIONS,
+            system_instruction=(
+                f"{VIDEO_ANALYSIS_INSTRUCTIONS}\n\n{LOCAL_SIGNAL_INSTRUCTIONS}"
+            ),
             temperature=0.1,
             response_mime_type="application/json",
             response_schema=VideoSentiment,
@@ -325,14 +338,18 @@ async def _analyze_video(
 
 
 async def analyze_shopping_information(
-    product: Product, shopping_information: dict[str, Any]
+    product: Product,
+    shopping_information: dict[str, Any],
+    local_model: dict[str, Any] | None = None,
 ) -> ShoppingSentiment:
     """Analyze all collected shopping information with one Gemini request."""
     prompt = (
         f"Product:\n{json.dumps(_product_context(product), ensure_ascii=False)}\n\n"
         "Shopping information:\n"
         f"<shopping_information>{json.dumps(shopping_information, ensure_ascii=False)}"
-        "</shopping_information>"
+        "</shopping_information>\n\n"
+        "Auxiliary local model metadata:\n"
+        f"<local_model>{json.dumps(local_model or {}, ensure_ascii=False)}</local_model>"
     )
 
     async with genai.Client(api_key=_get_gemini_api_key()).aio as client:
@@ -340,7 +357,9 @@ async def analyze_shopping_information(
             model=_get_gemini_model(),
             contents=prompt,
             config=types.GenerateContentConfig(
-                system_instruction=SHOPPING_ANALYSIS_INSTRUCTIONS,
+                system_instruction=(
+                    f"{SHOPPING_ANALYSIS_INSTRUCTIONS}\n\n{LOCAL_SIGNAL_INSTRUCTIONS}"
+                ),
                 temperature=0.1,
                 response_mime_type="application/json",
                 response_schema=ShoppingSentiment,
@@ -423,6 +442,52 @@ async def analyze_youtube_reviews(
             "sentimentSummaryError": "No usable transcripts were found.",
         }
 
+    product_identity = " ".join(
+        value.strip()
+        for value in (product.brand, product.title, product.model, product.variant)
+        if isinstance(value, str) and value.strip()
+    )
+    query = (
+        f"Independent review evidence about {product_identity}: performance, "
+        "quality, strengths, weaknesses, problems, and intended use"
+    )
+
+    async def prepare_candidate(
+        review_index: int,
+        candidate: tuple[str, str | None, str],
+    ) -> PreparedTexts:
+        _, title, transcript = candidate
+        prepared = await prepare_document(query, transcript)
+        if on_progress is not None:
+            await on_progress(
+                {
+                    "type": "gpu-analysis",
+                    "stage": "evidence-prepared",
+                    "reviewIndex": review_index,
+                    "reviewCount": len(candidates),
+                    "videoTitle": title,
+                    "localModel": prepared.metadata(),
+                }
+            )
+        return prepared
+
+    prepared_results = await asyncio.gather(
+        *(
+            prepare_candidate(review_index, candidate)
+            for review_index, candidate in enumerate(candidates)
+        )
+    )
+    prepared_candidates: list[
+        tuple[str, str | None, str, dict[str, Any]]
+    ] = []
+    for (video_id, title, original_transcript), prepared in zip(
+        candidates, prepared_results, strict=True
+    ):
+        transcript = "\n\n".join(prepared.texts) or original_transcript
+        prepared_candidates.append(
+            (video_id, title, transcript, prepared.metadata())
+        )
+
     model = _get_gemini_model()
     analyses: dict[str, dict[str, Any]] = {}
     successful_analyses = []
@@ -445,24 +510,36 @@ async def analyze_youtube_reviews(
                     review_index,
                     len(candidates),
                     on_progress,
+                    local_model,
                 )
-                for review_index, (_, title, transcript) in enumerate(candidates)
+                for review_index, (_, title, transcript, local_model) in enumerate(
+                    prepared_candidates
+                )
             ),
             return_exceptions=True,
         )
 
-        for (video_id, title, _), result in zip(candidates, results, strict=True):
+        for (video_id, title, _, local_model), result in zip(
+            prepared_candidates, results, strict=True
+        ):
             if isinstance(result, (errors.APIError, ValidationError, ValueError)):
                 error = _format_analysis_error(result)
                 print(f"  Sentiment analysis failed for {video_id}: {error}", flush=True)
                 failures.append(error)
-                analyses[video_id] = {"sentiment": None, "sentimentError": error}
+                analyses[video_id] = {
+                    "sentiment": None,
+                    "sentimentError": error,
+                    "localModel": local_model,
+                }
                 continue
             if isinstance(result, BaseException):
                 raise result
 
             dumped = result.model_dump()
-            analyses[video_id] = {"sentiment": dumped}
+            analyses[video_id] = {
+                "sentiment": dumped,
+                "localModel": local_model,
+            }
             successful_analyses.append({"videoTitle": title, "sentiment": dumped})
 
         if not successful_analyses:

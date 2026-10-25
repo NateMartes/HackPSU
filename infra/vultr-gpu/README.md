@@ -173,6 +173,20 @@ detection, or retrieval before a smaller sentiment model. Embeddings do not
 replace the live product/review collection step; they process whichever text a
 new request has just collected.
 
+The normal product routes use both private model services automatically:
+
+- `/api/prices` embedding-ranks offers before Gemini compares their value.
+- `/api/shopping` embedding-ranks and deduplicates review excerpts, then runs
+  local classification before Gemini produces the final evidence-backed result.
+- `/api/youtube` chunks transcripts, selects relevant passages with embeddings,
+  and classifies them before Gemini produces each final review analysis.
+
+GPU preparation is best-effort. If either local model is temporarily
+unavailable, the routes retain their previous behavior and continue with the
+original source ordering. Successful responses include `localModel` diagnostic
+metadata, while the extension continues to consume the existing analysis
+schema.
+
 ## 5. Destroy it when finished
 
 ```bash

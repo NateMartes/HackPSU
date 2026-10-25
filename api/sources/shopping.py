@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from serpapi import GoogleSearch
 
+from api.local_models import prepare_texts
 from api.sentiment import analyze_shopping_information
 from api.type import Product
 
@@ -165,6 +166,7 @@ async def shopping(product: Product) -> StreamingResponse:
 
     Events, one JSON object per line:
       {"type": "shopping-information", "data": {"rating", "reviews", "review_details"}}
+      {"type": "gpu-analysis", "stage": "reviews-prepared", "data": {...}}
       {"type": "analysis", "analysis": {"label", "score", "summary", "aspects"}}
       {"type": "result", "data": {shopping information plus "analysis"}}
       {"type": "error", "status": int, "error": str} (instead of analysis/result)
@@ -184,11 +186,47 @@ async def shopping(product: Product) -> StreamingResponse:
         )
 
         try:
-            # The first event can be rendered while this single Gemini request runs.
-            analysis_task = asyncio.create_task(
-                analyze_shopping_information(product, shopping_information)
+            review_records = [
+                review
+                for review in shopping_information.get("review_details", [])
+                if isinstance(review, dict)
+                and isinstance(review.get("text"), str)
+                and review["text"].strip()
+            ]
+            product_identity = " ".join(
+                value.strip()
+                for value in (product.brand, product.title, product.model, product.variant)
+                if isinstance(value, str) and value.strip()
             )
-            analysis = await analysis_task
+            query = (
+                f"Customer review evidence about {product_identity}: quality, "
+                "performance, strengths, weaknesses, problems, and value"
+            )
+            prepared = await prepare_texts(
+                query,
+                [review["text"] for review in review_records],
+                limit=8,
+                classify=True,
+            )
+            selected_reviews = [
+                review_records[index] for index in prepared.selected_indices
+            ]
+            analysis_input = {
+                **shopping_information,
+                "review_details": selected_reviews,
+            }
+            local_model = prepared.metadata()
+            yield _ndjson(
+                {
+                    "type": "gpu-analysis",
+                    "stage": "reviews-prepared",
+                    "data": local_model,
+                }
+            )
+
+            analysis = await analyze_shopping_information(
+                product, analysis_input, local_model
+            )
             dumped_analysis = analysis.model_dump()
             yield _ndjson({"type": "analysis", "analysis": dumped_analysis})
             yield _ndjson(
@@ -197,6 +235,7 @@ async def shopping(product: Product) -> StreamingResponse:
                     "data": {
                         **complete_shopping_information,
                         "analysis": dumped_analysis,
+                        "localModel": local_model,
                     },
                 }
             )
