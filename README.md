@@ -50,9 +50,17 @@ The backend uses a direct connection when neither variable is present and
 returns a configuration error if only one is set. Keep these credentials in the
 backend environment; never add them to the Chrome extension or commit them.
 
-The price and shopping routes are still placeholders and return `501 Not
-Implemented`. Requests from `http://localhost:3000` are allowed by the CORS
-configuration.
+The shopping route fetches product rating and review information through
+SerpApi and streams that data immediately as a `shopping-information` NDJSON
+event. Shopping candidates are ranked against the requested brand, model, and
+title. Product details use the exact offer token first, fall back to the product
+ID, and try up to three candidates when Google returns an empty product page.
+The route then sends the complete collected payload to Gemini in one request,
+streams the schema-validated analysis, and finishes with a `result` event.
+Specific aspect evidence is retained only when it is an exact excerpt from the
+supplied review text. It requires `SERPAPI_KEY` and `GEMINI_API_KEY`. The price
+route remains a basic lookup. Requests from `http://localhost:3000` are allowed
+by the CORS configuration.
 
 ## Chrome extension
 
@@ -77,9 +85,15 @@ streams a separate cross-video **Full Summary** while the video analysis and
 score remain unchanged. If the model is not already available, only Video
 Analysis remains visible and the extension does not start a model download. No additional
 manifest permission or Gemini API key is needed for the on-device summary. The
-price and shopping APIs remain
-available to callers but are not requested by the on-page card while those
-routes are placeholders:
+The on-page card requests shopping and YouTube concurrently. Shopping ratings
+and up to three review excerpts appear as soon as the first shopping stream
+event arrives, without waiting for Gemini's shopping analysis. When that
+analysis arrives, the card displays its sentiment in the same score-card format
+as video sentiment and places its summary plus review excerpts in one collapsed
+Reviews Summary. Gemini Nano receives both the shopping analysis and the video
+analyses when it writes the final Full Summary; it cannot replace their existing
+scores. The price API remains available to callers but is not requested by the
+card:
 
 ```js
 console.log(globalThis.product);

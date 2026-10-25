@@ -562,7 +562,9 @@ async def _youtube_events(
 
 
 def _ndjson(event: dict[str, Any]) -> bytes:
-    return (json.dumps(event, separators=(",", ":")) + "\n").encode()
+    return (
+        json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
 
 
 @router.post("/youtube")
