@@ -1,0 +1,24 @@
+# Find valid values with:
+#   vultr-cli regions list
+#   vultr-cli regions availability <region-id>
+#   vultr-cli plans list
+region      = "ewr"
+gpu_plan_id = "replace-with-an-available-gpu-plan"
+
+# Existing key IDs appear under `vultr-cli ssh-key list`.
+ssh_key_ids = ["replace-with-your-vultr-ssh-key-id"]
+
+# Replace this documentation address with your public IPv4 address.
+ssh_allowed_ipv4_cidrs = ["203.0.113.10/32"]
+
+# Defaults shown for clarity. Remove these lines to accept the defaults.
+embedding_model_id = "Qwen/Qwen3-Embedding-0.6B"
+embedding_image    = "ghcr.io/huggingface/text-embeddings-inference:cuda-1.9"
+deploy_classification_model = true
+classification_model_id     = "SamLowe/roberta-base-go_emotions"
+max_monthly_cost   = 400
+
+# The worker clones this branch or tag and builds its Dockerfile locally.
+# Push your deployment changes before applying Terraform.
+app_repository_url = "https://github.com/NateMartes/HackPSU.git"
+app_git_ref         = "main"

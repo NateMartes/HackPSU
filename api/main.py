@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.sources.prices import router as prices_router
 from api.sources.shopping import router as shopping_router
+from api.sources.models import router as models_router
 from api.sources.youtube import router as youtube_router
 
 
@@ -19,3 +20,9 @@ app.add_middleware(
 app.include_router(prices_router, prefix="/api")
 app.include_router(shopping_router, prefix="/api")
 app.include_router(youtube_router, prefix="/api")
+app.include_router(models_router, prefix="/api")
+
+
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}

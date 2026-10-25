@@ -1,0 +1,205 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - gnupg
+  - jq
+
+write_files:
+  - path: /etc/prvsa/api.env
+    permissions: "0600"
+    content: |
+      GEMINI_MODEL=gemini-3.1-flash-lite
+      YOUTUBE_TEST_DATA=false
+      EMBEDDING_BASE_URL=http://prvsa-embeddings:80
+      EMBEDDING_MODEL_ID=${embedding_model_id}
+      CLASSIFICATION_ENABLED=${classification_enabled}
+      CLASSIFICATION_BASE_URL=http://prvsa-classification:80
+      CLASSIFICATION_MODEL_ID=${classification_model_id}
+
+  - path: /etc/systemd/system/prvsa-embeddings.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=P.R.V.S.A. GPU embeddings server
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      Restart=always
+      RestartSec=10
+      TimeoutStartSec=0
+      ExecStartPre=-/usr/bin/docker rm -f prvsa-embeddings
+      ExecStart=/usr/bin/docker run --name prvsa-embeddings --rm --pull=always --network prvsa-gpu --gpus all --shm-size=1g -p 127.0.0.1:${embedding_port}:80 -v prvsa-embedding-cache:/data ${embedding_image} --model-id ${embedding_model_id}
+      ExecStop=-/usr/bin/docker stop -t 30 prvsa-embeddings
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/prvsa-classification.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=P.R.V.S.A. GPU text classification server
+      Requires=docker.service
+      After=docker.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      Restart=always
+      RestartSec=10
+      TimeoutStartSec=0
+      ExecStartPre=-/usr/bin/docker rm -f prvsa-classification
+      ExecStart=/usr/bin/docker run --name prvsa-classification --rm --pull=always --network prvsa-gpu --gpus all --shm-size=1g -p 127.0.0.1:${classification_port}:80 -v prvsa-classification-cache:/data ${classification_image} --model-id ${classification_model_id}
+      ExecStop=-/usr/bin/docker stop -t 30 prvsa-classification
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/prvsa-api.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=P.R.V.S.A. FastAPI backend
+      Requires=docker.service
+      After=docker.service network-online.target prvsa-embeddings.service prvsa-classification.service
+      Wants=network-online.target prvsa-embeddings.service
+
+      [Service]
+      Type=simple
+      Restart=always
+      RestartSec=5
+      TimeoutStartSec=0
+      ExecStartPre=-/usr/bin/docker rm -f prvsa-api
+      ExecStart=/usr/bin/docker run --name prvsa-api --rm --network prvsa-gpu --env-file /etc/prvsa/api.env --read-only --tmpfs /tmp:rw,noexec,nosuid,size=128m --cap-drop ALL --security-opt no-new-privileges -p 127.0.0.1:${api_port}:8000 prvsa-api:local
+      ExecStop=-/usr/bin/docker stop -t 30 prvsa-api
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /usr/local/bin/prvsa-deploy
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      git -C /opt/prvsa/app fetch --depth 1 origin ${app_git_ref}
+      git -C /opt/prvsa/app checkout --detach FETCH_HEAD
+      docker build --pull --tag prvsa-api:local /opt/prvsa/app
+      systemctl restart prvsa-api.service
+      echo "Deployed ${app_git_ref}; FastAPI is restarting."
+
+  - path: /usr/local/bin/prvsa-configure-api
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      if [[ $(id -u) -ne 0 ]]; then
+        echo "Run this command with sudo." >&2
+        exit 1
+      fi
+
+      read -r -s -p "Gemini API key: " prvsa_gemini_key
+      echo
+      read -r -s -p "YouTube API key: " prvsa_youtube_key
+      echo
+      read -r -s -p "SerpApi key: " prvsa_serpapi_key
+      echo
+      read -r -p "Webshare username (optional): " prvsa_proxy_user
+      read -r -s -p "Webshare password (optional): " prvsa_proxy_password
+      echo
+
+      if [[ -z "$prvsa_gemini_key" || -z "$prvsa_youtube_key" || -z "$prvsa_serpapi_key" ]]; then
+        echo "Gemini, YouTube, and SerpApi keys are required for all P.R.V.S.A. research routes." >&2
+        exit 1
+      fi
+      if [[ -n "$prvsa_proxy_user" && -z "$prvsa_proxy_password" ]] || [[ -z "$prvsa_proxy_user" && -n "$prvsa_proxy_password" ]]; then
+        echo "Provide both Webshare values or leave both blank." >&2
+        exit 1
+      fi
+
+      prvsa_config_tmp=$(mktemp)
+      trap 'rm -f "$prvsa_config_tmp"' EXIT
+      umask 077
+      printf '%s\n' \
+        "GEMINI_API_KEY=$prvsa_gemini_key" \
+        "YOUTUBE_API_KEY=$prvsa_youtube_key" \
+        "SERPAPI_KEY=$prvsa_serpapi_key" \
+        "GEMINI_MODEL=gemini-3.1-flash-lite" \
+        "YOUTUBE_TEST_DATA=false" \
+        "YOUTUBE_PROXY_USERNAME=$prvsa_proxy_user" \
+        "YOUTUBE_PROXY_PASSWORD=$prvsa_proxy_password" \
+        "EMBEDDING_BASE_URL=http://prvsa-embeddings:80" \
+        "EMBEDDING_MODEL_ID=${embedding_model_id}" \
+        "CLASSIFICATION_ENABLED=${classification_enabled}" \
+        "CLASSIFICATION_BASE_URL=http://prvsa-classification:80" \
+        "CLASSIFICATION_MODEL_ID=${classification_model_id}" \
+        > "$prvsa_config_tmp"
+      install -m 0600 "$prvsa_config_tmp" /etc/prvsa/api.env
+      systemctl restart prvsa-api.service
+      echo "API configuration installed and FastAPI restarted."
+
+  - path: /usr/local/bin/prvsa-gpu-status
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -u
+      echo "GPU"
+      nvidia-smi || true
+      echo
+      echo "Services"
+      systemctl --no-pager --full status prvsa-api.service prvsa-embeddings.service prvsa-classification.service || true
+      echo
+      echo "FastAPI"
+      curl --connect-timeout 2 --max-time 5 --fail --silent --show-error http://127.0.0.1:${api_port}/healthz || true
+      echo
+      echo "Model health"
+      curl --connect-timeout 2 --max-time 5 --fail --silent --show-error http://127.0.0.1:${api_port}/api/models/health || true
+      echo
+      echo "Recent API logs"
+      docker logs --tail 40 prvsa-api 2>&1 || true
+      echo
+      echo "Recent embedding logs"
+      docker logs --tail 40 prvsa-embeddings 2>&1 || true
+
+runcmd:
+  - |
+    set -eux
+    if ! command -v docker >/dev/null 2>&1; then
+      apt-get update
+      apt-get install -y docker.io
+    fi
+    systemctl enable --now docker
+
+    if ! command -v nvidia-ctk >/dev/null 2>&1; then
+      curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey -o /tmp/nvidia-container-toolkit.gpgkey
+      gpg --dearmor --yes --output /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg /tmp/nvidia-container-toolkit.gpgkey
+      curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list -o /tmp/nvidia-container-toolkit.list
+      sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' /tmp/nvidia-container-toolkit.list > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+      apt-get update
+      apt-get install -y nvidia-container-toolkit
+    fi
+    nvidia-ctk runtime configure --runtime=docker
+    systemctl restart docker
+    nvidia-smi
+
+    install -d -m 0700 /etc/prvsa
+    install -d -m 0755 /opt/prvsa
+    docker network inspect prvsa-gpu >/dev/null 2>&1 || docker network create prvsa-gpu
+    git clone --branch ${app_git_ref} --depth 1 ${app_repository_url} /opt/prvsa/app
+    docker build --pull --tag prvsa-api:local /opt/prvsa/app
+
+    systemctl daemon-reload
+    systemctl enable --now prvsa-embeddings.service
+%{ if classification_enabled }
+    systemctl enable --now prvsa-classification.service
+%{ endif }
+    systemctl enable --now prvsa-api.service
+
+final_message: "P.R.V.S.A. GPU and API bootstrap finished after $UPTIME seconds. Run: sudo prvsa-configure-api"
