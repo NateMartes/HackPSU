@@ -10,9 +10,10 @@
       .panel {
         --ink: #17212b; --muted: #697783; --line: #d9e0e5; --paper: #fff;
         --wash: #f5f7f8; --accent: #ff9900; --accent-deep: #c45500;
-        position: fixed; z-index: 2147483647; right: 22px; bottom: 22px;
-        width: min(368px, calc(100vw - 28px)); max-height: min(610px, calc(100vh - 44px));
-        overflow: hidden auto; border: 1px solid #c9d1d8; border-radius: 14px;
+        position: fixed; z-index: 2147483647; left: 22px; bottom: 22px;
+        display: flex; width: min(368px, calc(100vw - 28px));
+        height: min(610px, calc(100vh - 44px)); flex-direction: column;
+        overflow: hidden; border: 1px solid #c9d1d8; border-radius: 14px;
         background: var(--paper); box-shadow: 0 14px 38px rgba(15,31,45,.2), 0 2px 8px rgba(15,31,45,.09);
         color: var(--ink); font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 1.4;
         animation: arrive 220ms ease-out both;
@@ -21,7 +22,7 @@
       @keyframes spin { to { transform: rotate(360deg); } }
       @keyframes shimmer { to { transform: translateX(220%); } }
       .header {
-        display: flex; align-items: center; gap: 10px; padding: 14px 14px 12px;
+        display: flex; flex: 0 0 auto; align-items: center; gap: 10px; padding: 14px 14px 12px;
         border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #fff, #fbfcfc);
       }
       .mark {
@@ -35,7 +36,7 @@
       .close { width: 30px; height: 30px; cursor: pointer; border-radius: 50%; color: #596773; font-size: 22px; line-height: 30px; }
       .close:hover { background: #edf0f2; color: #17212b; }
       .close:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid rgba(255,153,0,.42); outline-offset: 2px; }
-      .body { padding: 15px; }
+      .body { min-height: 0; flex: 1 1 auto; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; padding: 15px; }
       .status { display: flex; align-items: center; gap: 9px; min-height: 24px; color: #46545f; font-size: 13px; }
       .spinner { width: 16px; height: 16px; flex: 0 0 16px; border: 2px solid #d8dde1; border-top-color: var(--accent-deep); border-radius: 50%; animation: spin .75s linear infinite; }
       .status.done .spinner { display: none; }
@@ -58,6 +59,12 @@
       .verdict { margin-top: 2px; font-size: 19px; font-weight: 700; text-transform: capitalize; }
       .score { display: grid; min-width: 64px; height: 50px; padding: 0 9px; place-items: center; border-radius: 9px; background: #fff; box-shadow: inset 0 0 0 1px #d6dce0; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
       .positive { color: #067647; } .negative { color: #b42318; } .neutral { color: #6b5d20; }
+      .skeleton { position: relative; overflow: hidden; background: #e7ebee; color: transparent; }
+      .skeleton::after { content: ""; position: absolute; inset: 0; width: 45%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.75), transparent); animation: shimmer 1.25s ease-in-out infinite; transform: translateX(-120%); }
+      .verdict.skeleton { width: 112px; height: 23px; margin-top: 4px; border-radius: 6px; }
+      .score.skeleton { box-shadow: none; }
+      .analysis-placeholder { height: 43px; margin-top: 10px; padding: 13px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+      .analysis-placeholder .skeleton { width: 118px; height: 15px; border-radius: 5px; }
       details { margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
       summary { padding: 11px 12px; cursor: pointer; color: #263746; font-weight: 700; list-style: none; }
       summary::-webkit-details-marker { display: none; }
@@ -66,7 +73,7 @@
       .summary-copy { margin: 0; padding: 0 12px 13px; color: #4b5964; font-size: 13px; line-height: 1.55; }
       .error { margin-top: 12px; padding: 11px 12px; border: 1px solid #f0c8c5; border-radius: 9px; background: #fff4f3; color: #8d2119; font-size: 13px; }
       [hidden] { display: none !important; }
-      @media (max-width: 520px) { .panel { right: 14px; bottom: 14px; } }
+      @media (max-width: 520px) { .panel { left: 14px; bottom: 14px; } }
       @media (prefers-reduced-motion: reduce) { .panel { animation: none; } .spinner { animation-duration: 1.5s; } .progress::after { animation-duration: 2.5s; } }
     </style>
     <aside class="panel" role="dialog" aria-labelledby="analysis-title" aria-live="polite">
@@ -79,9 +86,11 @@
         <div class="status"><span class="spinner" aria-hidden="true"></span><span class="status-copy">Finding product reviews…</span></div>
         <div class="progress" role="progressbar" aria-label="Analysis in progress"></div>
         <section class="sources" hidden><div class="section-label">Reviews being analyzed</div><div class="videos"></div></section>
-        <section class="result" hidden>
-          <div class="score-card"><div><div class="verdict-label">Overall video sentiment</div><div class="verdict"></div></div><div class="score" aria-label="Sentiment score"></div></div>
-          <details><summary>Full summary</summary><p class="summary-copy"></p></details>
+        <section class="result" aria-busy="true">
+          <div class="score-card"><div><div class="verdict-label">Overall video sentiment</div><div class="verdict skeleton" aria-hidden="true"></div></div><div class="score skeleton" aria-hidden="true"></div></div>
+          <div class="analysis-placeholder" aria-hidden="true"><div class="skeleton"></div></div>
+          <details class="video-analysis" hidden><summary>Video Analysis</summary><p class="video-analysis-copy summary-copy"></p></details>
+          <details class="full-summary" hidden><summary>Full Summary</summary><p class="full-summary-copy summary-copy"></p></details>
         </section>
         <div class="error" role="alert" hidden></div>
       </div>
@@ -126,8 +135,13 @@
     const resultSection = shadow.querySelector(".result");
     const verdict = shadow.querySelector(".verdict");
     const score = shadow.querySelector(".score");
-    const summaryCopy = shadow.querySelector(".summary-copy");
+    const analysisPlaceholder = shadow.querySelector(".analysis-placeholder");
+    const videoAnalysis = shadow.querySelector(".video-analysis");
+    const videoAnalysisCopy = shadow.querySelector(".video-analysis-copy");
+    const fullSummary = shadow.querySelector(".full-summary");
+    const fullSummaryCopy = shadow.querySelector(".full-summary-copy");
     const errorBox = shadow.querySelector(".error");
+    const streamedAnalyses = new Map();
 
     title.textContent = product?.title || "Product analysis";
     panel.setAttribute("aria-label", `Review analysis for ${product?.title || "this product"}`);
@@ -169,7 +183,14 @@
       }
     }
 
-    function showResult(data) {
+    function showProcessing(message) {
+      status.classList.remove("done", "failed");
+      statusCopy.textContent = message;
+      progress.hidden = false;
+      errorBox.hidden = true;
+    }
+
+    function showResult(data, completionMessage = "Analysis complete", complete = true) {
       const summary = data?.sentimentSummary;
       if (!summary || typeof summary !== "object") {
         showError(data?.sentimentSummaryError || "No usable video review transcripts were found.");
@@ -178,15 +199,67 @@
       const label = ["positive", "neutral", "negative"].includes(summary.label) ? summary.label : "neutral";
       verdict.textContent = label;
       verdict.className = `verdict ${label}`;
+      verdict.removeAttribute("aria-hidden");
       score.textContent = scoreText(summary.score);
       score.className = `score ${label}`;
+      score.removeAttribute("aria-hidden");
       score.setAttribute("aria-label", `Sentiment score ${score.textContent} on a scale from negative one to positive one`);
-      summaryCopy.textContent = summary.summary || "No written summary was returned.";
-      status.classList.add("done");
-      statusCopy.textContent = "Analysis complete";
-      progress.hidden = true;
+      analysisPlaceholder.hidden = true;
+      videoAnalysis.hidden = false;
+      videoAnalysisCopy.textContent = data?.videoSummary
+        || (!data?.summarizedLocally ? summary.summary : "")
+        || "No video analysis was returned.";
+      fullSummary.hidden = !data?.summarizedLocally;
+      fullSummaryCopy.textContent = data?.summarizedLocally
+        ? (summary.summary || "No full summary was returned.")
+        : "";
+      status.classList.remove("failed");
+      status.classList.toggle("done", complete);
+      statusCopy.textContent = completionMessage;
+      progress.hidden = complete;
       errorBox.hidden = true;
       resultSection.hidden = false;
+      resultSection.setAttribute("aria-busy", String(!complete));
+    }
+
+    function handleAnalysisEvent(event) {
+      const reviewCount = Number(event?.reviewCount) || 0;
+      if (event?.type === "analysis-result" && event.sentiment) {
+        streamedAnalyses.set(event.reviewIndex, {
+          videoTitle: event.videoTitle,
+          sentiment: event.sentiment,
+        });
+        try {
+          const partial = root.nanoAggregator?.combineWithoutNano({
+            reviewAnalyses: [...streamedAnalyses.values()],
+          });
+          if (partial) {
+            showResult(
+              partial,
+              `Analyzed ${streamedAnalyses.size} of ${reviewCount} reviews…`,
+              false,
+            );
+          }
+        } catch (_error) {
+          // Keep the skeletons until at least one valid review result arrives.
+        }
+        return;
+      }
+
+      if (event?.type === "analysis-started" || event?.type === "analysis-delta") {
+        const completed = streamedAnalyses.size;
+        showProcessing(
+          completed
+            ? `Analyzing reviews… ${completed} of ${reviewCount} complete`
+            : `Analyzing ${reviewCount} video review${reviewCount === 1 ? "" : "s"}…`,
+        );
+      }
+    }
+
+    function showFullSummaryStream(summary) {
+      fullSummary.hidden = false;
+      fullSummary.open = true;
+      fullSummaryCopy.textContent = summary;
     }
 
     function showError(message) {
@@ -198,7 +271,16 @@
       errorBox.hidden = false;
     }
 
-    return { handleEvent(event) { if (event?.type === "videos") showVideos(event.videos); }, showResult, showError };
+    return {
+      handleEvent(event) {
+        if (event?.type === "videos") showVideos(event.videos);
+        else handleAnalysisEvent(event);
+      },
+      showError,
+      showFullSummaryStream,
+      showProcessing,
+      showResult,
+    };
   }
 
   root.productAnalysisUI = Object.freeze({ mount });

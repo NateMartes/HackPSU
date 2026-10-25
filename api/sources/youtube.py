@@ -11,6 +11,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from youtube_transcript_api import YouTubeTranscriptApi, YouTubeTranscriptApiException
+from youtube_transcript_api.proxies import WebshareProxyConfig
 
 from api.sentiment import MAX_ANALYZED_VIDEOS, analyze_youtube_reviews
 from api.type import Product
@@ -22,8 +23,10 @@ YOUTUBE_SEARCH_API_URL = "https://www.googleapis.com/youtube/v3/search"
 YOUTUBE_VIDEOS_API_URL = "https://www.googleapis.com/youtube/v3/videos"
 YOUTUBE_WATCH_URL = "https://www.youtube.com/watch?v="
 YOUTUBE_API_KEY_ENV = "YOUTUBE_API_KEY"
+YOUTUBE_PROXY_USERNAME_ENV = "YOUTUBE_PROXY_USERNAME"
+YOUTUBE_PROXY_PASSWORD_ENV = "YOUTUBE_PROXY_PASSWORD"
 NON_SPEECH_PATTERN = re.compile(r"\[(music|applause|laughter|silence)\]", re.I)
-YOUTUBE_SEARCH_RESULT_LIMIT = 15
+YOUTUBE_SEARCH_RESULT_LIMIT = 10
 TRANSCRIPT_BATCH_SIZE = 5
 
 
@@ -49,6 +52,39 @@ def _get_youtube_api_key() -> str:
         )
 
     return api_key
+
+
+def _get_youtube_proxy_credentials() -> tuple[str, str] | None:
+    """Return optional Webshare credentials, requiring both values together."""
+    username = os.getenv(YOUTUBE_PROXY_USERNAME_ENV, "").strip()
+    password = os.getenv(YOUTUBE_PROXY_PASSWORD_ENV, "").strip()
+    if bool(username) != bool(password):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"{YOUTUBE_PROXY_USERNAME_ENV} and {YOUTUBE_PROXY_PASSWORD_ENV} "
+                "must both be configured."
+            ),
+        )
+    if not username:
+        return None
+    return username, password
+
+
+def _create_transcript_api(
+    proxy_credentials: tuple[str, str] | None,
+) -> YouTubeTranscriptApi:
+    if proxy_credentials is None:
+        return YouTubeTranscriptApi()
+
+    username, password = proxy_credentials
+    return YouTubeTranscriptApi(
+        proxy_config=WebshareProxyConfig(
+            proxy_username=username,
+            proxy_password=password,
+            filter_ip_locations=["us"],
+        )
+    )
 
 
 async def _search_youtube(product: Product) -> dict[str, Any]:
@@ -283,9 +319,13 @@ def _aggregate_transcript(snippets: list[dict[str, Any]]) -> str:
     return " ".join(cleaned_snippets)
 
 
-def _fetch_transcript(video_id: str) -> tuple[str, dict[str, Any]]:
+def _fetch_transcript(
+    video_id: str, proxy_credentials: tuple[str, str] | None
+) -> tuple[str, dict[str, Any]]:
     try:
-        transcript = YouTubeTranscriptApi().fetch(video_id, languages=["en"])
+        transcript = _create_transcript_api(proxy_credentials).fetch(
+            video_id, languages=["en"]
+        )
         result = {
             "transcript": {
                 "language": transcript.language,
@@ -305,11 +345,18 @@ def _fetch_transcript(video_id: str) -> tuple[str, dict[str, Any]]:
 
 
 async def _fetch_transcripts(video_ids: list[str]) -> dict[str, dict[str, Any]]:
+    proxy_credentials = _get_youtube_proxy_credentials()
+    if proxy_credentials is not None:
+        print("Using Webshare rotating residential proxies...", flush=True)
+
     transcripts: dict[str, dict[str, Any]] = {}
     for start in range(0, len(video_ids), TRANSCRIPT_BATCH_SIZE):
         batch = video_ids[start : start + TRANSCRIPT_BATCH_SIZE]
         results = await asyncio.gather(
-            *(asyncio.to_thread(_fetch_transcript, video_id) for video_id in batch)
+            *(
+                asyncio.to_thread(_fetch_transcript, video_id, proxy_credentials)
+                for video_id in batch
+            )
         )
         transcripts.update(results)
 
@@ -372,19 +419,41 @@ def _video_id_from_item(item: dict[str, Any]) -> str | None:
     return video_id if isinstance(video_id, str) else None
 
 
-def _public_sentiment_summary(summary: Any) -> Any:
-    if not isinstance(summary, dict):
-        return summary
-    return {key: summary[key] for key in ("label", "score", "summary") if key in summary}
+def _public_review_analyses(value: Any) -> list[dict[str, Any]]:
+    """Return only the existing review analyses needed by the local aggregator."""
+    if not isinstance(value, list):
+        return []
+
+    public_analyses = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        sentiment = item.get("sentiment")
+        if not isinstance(sentiment, dict):
+            continue
+        score = sentiment.get("score")
+        if not isinstance(score, (int, float)) or isinstance(score, bool):
+            continue
+        public_analyses.append(
+            {
+                "videoTitle": item.get("videoTitle"),
+                "sentiment": {
+                    key: sentiment[key]
+                    for key in ("label", "score", "summary", "aspects")
+                    if key in sentiment
+                },
+            }
+        )
+    return public_analyses
 
 
 def filter_results(payload: dict[str, Any]) -> dict[str, Any]:
-    """Keep a compact sentiment summary only.
+    """Keep compact per-review analyses for the on-device aggregator.
 
     Videos are already sent to the client in the earlier "videos" event.
     """
     filtered: dict[str, Any] = {
-        "sentimentSummary": _public_sentiment_summary(payload.get("sentimentSummary")),
+        "reviewAnalyses": _public_review_analyses(payload.get("reviewAnalyses")),
     }
     summary_error = payload.get("sentimentSummaryError")
     if isinstance(summary_error, str) and summary_error:
@@ -462,9 +531,23 @@ async def _youtube_events(
         yield {"type": "videos", "videos": _video_previews(search_results, transcripts)}
 
         print("Analyzing review sentiment...", flush=True)
-        analyses, summary = await analyze_youtube_reviews(
-            product, search_results, transcripts
-        )
+        progress_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+        async def queue_progress(event: dict[str, Any]) -> None:
+            await progress_queue.put(event)
+
+        async def run_analysis() -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+            try:
+                return await analyze_youtube_reviews(
+                    product, search_results, transcripts, queue_progress
+                )
+            finally:
+                await progress_queue.put(None)
+
+        analysis_task = asyncio.create_task(run_analysis())
+        while (progress_event := await progress_queue.get()) is not None:
+            yield progress_event
+        analyses, summary = await analysis_task
         statistics = await statistics_task
     finally:
         statistics_task.cancel()
@@ -490,7 +573,12 @@ async def youtube(product: Product) -> StreamingResponse:
       {"type": "videos", "videos":
         [{"url", "title", "channelTitle", "thumbnail"}, ...]}
           Only videos with a usable transcript; sent once transcripts are fetched.
-      {"type": "result", "data": {"sentimentSummary", "sentimentSummaryError"?}}
+      {"type": "analysis-started", "reviewIndex", "reviewCount", "videoTitle"}
+      {"type": "analysis-delta", "reviewIndex", "reviewCount", "videoTitle", "delta"}
+          Tagged partial structured output from cloud Gemini.
+      {"type": "analysis-result", "reviewIndex", "reviewCount", "videoTitle", "sentiment"}
+          A complete schema-validated review analysis.
+      {"type": "result", "data": {"reviewAnalyses", "sentimentSummaryError"?}}
       {"type": "error", "status": int, "error": str}   (sent instead of "result")
     """
     # Search before opening the stream so config/search failures still return
